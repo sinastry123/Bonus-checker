@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         kkkonus Checker - Final Version
 // @namespace    http://example.com
-// @version      7.4
+// @version      7.5
 // @description  Uses login request approach for bonus data, maintains original GUI, auto-navigates to next URL without merchant ID
 // @match        *://*/*
 // @grant        GM_getValue
