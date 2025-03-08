@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Alannah Checker - Final Version
+// @name         kkkonus Checker - Final Version
 // @namespace    http://example.com
-// @version      8.2
+// @version      8.3
 // @description  Uses login request approach for bonus data, maintains original GUI, auto-navigates to next URL without merchant ID
 // @updateURL    https://raw.githubusercontent.com/sinastry123/Bonus-checker/main/Bonus.js
 // @downloadURL  https://raw.githubusercontent.com/sinastry123/Bonus-checker/main/Bonus.js
@@ -59,6 +59,9 @@ window._bonusCheckerAlreadyLoaded = true;
     let lastListedDomain = null;
     let lastCapturedDomain = null;
     let lastCapturedBonus = null;
+// At the very top along with your other globals:
+let sortMode = GM_getValue("sortMode", "commission");
+let maxWithdrawalBonusType = "commission";  // NEW: declare maxWithdrawalBonusType
 
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
@@ -69,8 +72,6 @@ window._bonusCheckerAlreadyLoaded = true;
     let checkLiveClickCount = 0; // Track the state of the Check Live button
     let showingLastData = false;
     // Sort mode for bonus sorting
-    let sortMode = GM_getValue("sortMode", 0);
-
     /***********************************************
      *         HELPER / UTILITY FUNCS              *
      ***********************************************/
@@ -850,34 +851,37 @@ function clearTemporaryData() {
 
     // If you have other control buttons whose event listeners might be lost, you can do something similar:
     function rebindControlButtons() {
-        const editUrlsBtn = document.getElementById('editUrls');
-        const checkBonusesBtn = document.getElementById('checkBonuses');
-        const refreshLastBtn = document.getElementById('refreshLastBtn');
-        const nextDomainBtn = document.getElementById('nextDomainBtn');
-        const showValidBonusesBtn = document.getElementById('showValidBonusesBtn');
-        const toggleAutoLoginBtn = document.getElementById('toggleAutoLogin');
-        const toggleAutoNavNonVisitedBtn = document.getElementById('toggleAutoNavNonVisited');
-        const toggleAutoNavValidBtn = document.getElementById('toggleAutoNavValid');
-        const minimizeTrackerBtn = document.getElementById('minimizeTracker');
-        const maximizeTrackerBtn = document.getElementById('maximizeTracker');
-        const toggleSortBtn = document.getElementById('toggleSortBtn');
-        const setDomainCredentialsBtn = document.getElementById('setDomainCredentials');
-        const clearWithinRangeBtn = document.getElementById('clearWithinRangeBtn');
-
-        if (editUrlsBtn) editUrlsBtn.addEventListener('click', openEditModal);
-        if (checkBonusesBtn) checkBonusesBtn.addEventListener('click', checkAllBonuses);
-        if (refreshLastBtn) refreshLastBtn.addEventListener('click', refreshLastVisited);
-        if (nextDomainBtn) nextDomainBtn.addEventListener('click', goToNextDomain);
-        if (showValidBonusesBtn) showValidBonusesBtn.addEventListener('click', showValidBonuses);
-        if (toggleAutoLoginBtn) toggleAutoLoginBtn.addEventListener('click', toggleAutoLogin);
-        if (toggleAutoNavNonVisitedBtn) toggleAutoNavNonVisitedBtn.addEventListener('click', toggleNavNonVisited);
-        if (toggleAutoNavValidBtn) toggleAutoNavValidBtn.addEventListener('click', toggleNavValid);
-        if (minimizeTrackerBtn) minimizeTrackerBtn.onclick = minimizeResults;
-        if (maximizeTrackerBtn) maximizeTrackerBtn.onclick = maximizeResults;
-        if (toggleSortBtn) toggleSortBtn.addEventListener('click', cycleSortMode);
-        if (setDomainCredentialsBtn) setDomainCredentialsBtn.addEventListener('click', openDomainCredentialsModal);
-        if (clearWithinRangeBtn) clearWithinRangeBtn.addEventListener('click', openRangeModal);
+    const editUrlsBtn = document.getElementById('editUrls');
+    const checkBonusesBtn = document.getElementById('checkBonuses');
+    const refreshLastBtn = document.getElementById('refreshLastBtn');
+    const nextDomainBtn = document.getElementById('nextDomainBtn');
+    const showValidBonusesBtn = document.getElementById('showValidBonusesBtn');
+    const toggleAutoLoginBtn = document.getElementById('toggleAutoLogin');
+    const toggleAutoNavNonVisitedBtn = document.getElementById('toggleAutoNavNonVisited');
+    const toggleAutoNavValidBtn = document.getElementById('toggleAutoNavValid');
+    const minimizeTrackerBtn = document.getElementById('minimizeTracker');
+    const maximizeTrackerBtn = document.getElementById('maximizeTracker');
+    // UPDATED: Bind the sort button to openSortOptionsPopup instead of cycleSortMode.
+    const toggleSortBtn = document.getElementById('toggleSortBtn');
+    if (toggleSortBtn) {
+         toggleSortBtn.addEventListener('click', openSortOptionsPopup);
     }
+    const setDomainCredentialsBtn = document.getElementById('setDomainCredentials');
+    const clearWithinRangeBtn = document.getElementById('clearWithinRangeBtn');
+
+    if (editUrlsBtn) editUrlsBtn.addEventListener('click', openEditModal);
+    if (checkBonusesBtn) checkBonusesBtn.addEventListener('click', checkAllBonuses);
+    if (refreshLastBtn) refreshLastBtn.addEventListener('click', refreshLastVisited);
+    if (nextDomainBtn) nextDomainBtn.addEventListener('click', goToNextDomain);
+    if (showValidBonusesBtn) showValidBonusesBtn.addEventListener('click', showValidBonuses);
+    if (toggleAutoLoginBtn) toggleAutoLoginBtn.addEventListener('click', toggleAutoLogin);
+    if (toggleAutoNavNonVisitedBtn) toggleAutoNavNonVisitedBtn.addEventListener('click', toggleNavNonVisited);
+    if (toggleAutoNavValidBtn) toggleAutoNavValidBtn.addEventListener('click', toggleNavValid);
+    if (minimizeTrackerBtn) minimizeTrackerBtn.onclick = minimizeResults;
+    if (maximizeTrackerBtn) maximizeTrackerBtn.onclick = maximizeResults;
+    if (setDomainCredentialsBtn) setDomainCredentialsBtn.addEventListener('click', openDomainCredentialsModal);
+    if (clearWithinRangeBtn) clearWithinRangeBtn.addEventListener('click', openRangeModal);
+}
 function updateCheckLiveButton() {
     const btn = document.getElementById('checkBonuses');
     if (!btn) return;
@@ -2084,8 +2088,7 @@ GM_addStyle(`
     addListener(guiContent.querySelector('#toggleAutoLogin'), 'click', toggleAutoLogin);
     addListener(guiContent.querySelector('#toggleAutoNavNonVisited'), 'click', toggleNavNonVisited);
     addListener(guiContent.querySelector('#toggleAutoNavValid'), 'click', toggleNavValid);
-    addListener(guiContent.querySelector('#toggleSortBtn'), 'click', cycleSortMode);
-    addListener(guiContent.querySelector('#setDomainCredentials'), 'click', openDomainCredentialsModal);
+addListener(guiContent.querySelector('#toggleSortBtn'), 'click', openSortOptionsPopup);    addListener(guiContent.querySelector('#setDomainCredentials'), 'click', openDomainCredentialsModal);
     addListener(guiContent.querySelector('#clearWithinRangeBtn'), 'click', openRangeModal);
 
     // Perform final UI updates
@@ -2454,62 +2457,187 @@ function cycleSortMode() {
 function updateSortButtonText() {
     const btn = document.getElementById('toggleSortBtn');
     if (!btn) return;
-    const sortTypes = ["Commission", "Share", "Referral", "Balance", "Errors"];
-    btn.textContent = `Sort: ${sortTypes[sortMode]}`;
+    // Display sortMode with its first letter capitalized
+    btn.textContent = `Sort: ${sortMode.charAt(0).toUpperCase() + sortMode.slice(1)}`;
 }
+
+
 
 // Reorder the non-current domain cards based on the chosen sort mode.
 function sortDomainCards() {
     const results = document.getElementById('resultsArea');
     if (!results) return;
 
-    // Get the dedicated current domain card container so it remains in place.
+    // Get the current domain card container so it stays in place.
     const currentContainer = document.getElementById('currentDomainCardContainer');
-
     // Get all non-current domain cards.
     const otherCards = Array.from(results.querySelectorAll('.site-card:not(.current-domain-card)'));
 
-    // Sort the cards based on the bonus data in temporaryBonusData.
     otherCards.sort((a, b) => {
         const domainA = a.getAttribute('data-domain') || '';
         const domainB = b.getAttribute('data-domain') || '';
         const infoA = temporaryBonusData[domainA];
         const infoB = temporaryBonusData[domainB];
 
-        // If both lack bonus data, keep their order.
+        // If neither card has bonus data, leave them in place.
         if (!infoA && !infoB) return 0;
-        // If one is missing data, push it toward the bottom.
         if (!infoA) return 1;
         if (!infoB) return -1;
 
-        // Compare based on the selected sort mode.
-        switch (sortMode) {
-            case 0: // Commission – higher commission amounts come first.
-                return compareNumbers(infoA?.commission?.amount, infoB?.commission?.amount);
-            case 1: // Share – higher share amounts come first.
-                return compareNumbers(infoA?.share?.amount, infoB?.share?.amount);
-            case 2: // Referral – higher referral amounts come first.
-                return compareNumbers(infoA?.referral?.amount, infoB?.referral?.amount);
-            case 3: // Balance – higher cash balance comes first.
-                return compareNumbers(infoA?.cash, infoB?.cash);
-            case 4: // Errors – domains with missing bonus data (errors) go to the bottom.
-                return isErrorDomain(infoB) - isErrorDomain(infoA);
-            default:
-                return 0;
+        if (sortMode === 'maxWithdrawal') {
+            // For maxWithdrawal, sort based on the selected bonus type's maxWithdrawal value.
+            let bonusA = infoA[maxWithdrawalBonusType];
+            let bonusB = infoB[maxWithdrawalBonusType];
+            const maxA = bonusA && bonusA.maxWithdrawal ? parseFloat(bonusA.maxWithdrawal) : 0;
+            const maxB = bonusB && bonusB.maxWithdrawal ? parseFloat(bonusB.maxWithdrawal) : 0;
+            return maxB - maxA;
+        } else if (sortMode === 'commission') {
+            return compareNumbers(infoA?.commission?.amount, infoB?.commission?.amount);
+        } else if (sortMode === 'share') {
+            return compareNumbers(infoA?.share?.amount, infoB?.share?.amount);
+        } else if (sortMode === 'referral') {
+            return compareNumbers(infoA?.referral?.amount, infoB?.referral?.amount);
+        } else if (sortMode === 'balance') {
+            return compareNumbers(infoA?.cash, infoB?.cash);
+        } else if (sortMode === 'errors') {
+            return isErrorDomain(infoB) - isErrorDomain(infoA);
+        } else {
+            return 0;
         }
     });
 
-    // Clear the results area and append the current domain container followed by sorted cards.
+    // Clear the results area and reassemble the cards.
     results.innerHTML = '';
     if (currentContainer) {
         results.appendChild(currentContainer);
     }
     otherCards.forEach(card => results.appendChild(card));
-
-    updateStatusWithColor(`Sorted domains by ${["Commission", "Share", "Referral", "Balance", "Errors"][sortMode]}`, true);
+    updateStatusWithColor(`Sorted domains by ${sortMode === 'maxWithdrawal' ? 'Max Withdrawal ('+ maxWithdrawalBonusType +')' : sortMode}`, true);
 }
 
-// Helper: Compare two numbers (or fallback to 0) so that higher values come first.
+    // ----- openSortOptionsPopup function -----
+// This popup allows the user to select which bonus type to use for maxWithdrawal (if that sort is chosen) and sets sortMode.
+function openSortOptionsPopup() {
+    let modal = document.getElementById('sortOptionsModal');
+    if (!modal) {
+        // Create the modal overlay and inner content.
+        modal = document.createElement('div');
+        modal.id = 'sortOptionsModal';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+          <div class="sort-modal" style="background: rgba(0,0,0,0.9); padding: 20px; border: 2px solid #ff1493; border-radius: 8px; width: 300px; text-align: center;">
+            <h3 style="color: #ff1493;">Sort Options</h3>
+            <div class="sort-options" style="margin-bottom: 10px;">
+              <button class="control-btn sort-option" data-mode="commission" style="margin: 2px;">Commission</button>
+              <button class="control-btn sort-option" data-mode="share" style="margin: 2px;">Share</button>
+              <button class="control-btn sort-option" data-mode="referral" style="margin: 2px;">Referral</button>
+              <button class="control-btn sort-option" data-mode="balance" style="margin: 2px;">Balance</button>
+              <button class="control-btn sort-option" data-mode="errors" style="margin: 2px;">Errors</button>
+              <button class="control-btn sort-option" data-mode="maxWithdrawal" style="margin: 2px;">Max Withdrawal</button>
+            </div>
+            <div id="maxWithdrawalBonusSelection" style="display:none; margin-bottom: 10px; color: #fff;">
+              <p>Select bonus type for max withdrawal:</p>
+              <label style="margin-right: 5px;"><input type="radio" name="maxWithdrawalBonus" value="commission" checked> Commission</label>
+              <label style="margin-right: 5px;"><input type="radio" name="maxWithdrawalBonus" value="share"> Share</label>
+              <label style="margin-right: 5px;"><input type="radio" name="maxWithdrawalBonus" value="referral"> Referral</label>
+            </div>
+            <div style="margin-bottom: 10px;">
+              <input type="text" id="sortSearchInput" placeholder="Search domain..." style="width: 90%; padding: 5px;">
+            </div>
+            <div>
+              <button id="applySortOptions" class="control-btn" style="margin-right: 5px;">Apply</button>
+              <button id="cancelSortOptions" class="control-btn">Cancel</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(modal);
+
+        // Bind click events for sort option buttons.
+        const sortOptionButtons = modal.querySelectorAll('.sort-option');
+        sortOptionButtons.forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                // Remove active styling from all buttons.
+                sortOptionButtons.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                sortMode = btn.getAttribute('data-mode'); // update global sortMode
+                if (sortMode === 'maxWithdrawal') {
+                    document.getElementById('maxWithdrawalBonusSelection').style.display = 'block';
+                } else {
+                    document.getElementById('maxWithdrawalBonusSelection').style.display = 'none';
+                }
+            });
+        });
+
+        // Bind live search filtering.
+        document.getElementById('sortSearchInput').addEventListener('input', applySearchFilter);
+
+        // Bind Apply button.
+        document.getElementById('applySortOptions').addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (sortMode === 'maxWithdrawal') {
+                // Read the bonus type selection.
+                const radios = document.getElementsByName('maxWithdrawalBonus');
+                for (let radio of radios) {
+                    if (radio.checked) {
+                        maxWithdrawalBonusType = radio.value;
+                        break;
+                    }
+                }
+            }
+            sortDomainCards();
+            applySearchFilter();
+            closeSortOptionsPopup();
+            updateSortButtonText();
+        });
+
+        // Bind Cancel button.
+        document.getElementById('cancelSortOptions').addEventListener('click', function(e) {
+            e.stopPropagation();
+            closeSortOptionsPopup();
+        });
+
+        // Close modal if clicking outside the inner content.
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) {
+                closeSortOptionsPopup();
+            }
+        });
+    }
+    // Show the modal by adding the "active" class.
+    modal.classList.add('active');
+}
+
+function closeSortOptionsPopup() {
+    const modal = document.getElementById('sortOptionsModal');
+    if (modal) {
+        modal.classList.remove('active');
+        // Optionally remove the modal from the DOM after a brief delay
+        setTimeout(() => {
+            if (modal.parentNode) {
+                modal.parentNode.removeChild(modal);
+            }
+        }, 300);
+    }
+}
+
+function applySearchFilter() {
+    const searchValue = document.getElementById('sortSearchInput').value.toLowerCase().trim();
+    const cards = document.querySelectorAll('.site-card');
+    cards.forEach(card => {
+        const domain = card.getAttribute('data-domain') || "";
+        if (domain.toLowerCase().includes(searchValue)) {
+            card.style.display = "block";
+        } else {
+            card.style.display = "none";
+        }
+    });
+}
+//
+
+
+
+    // Helper: Compare two numbers (or fallback to 0) so that higher values come first.
 function compareNumbers(a, b) {
     const valA = parseFloat(a) || 0;
     const valB = parseFloat(b) || 0;
@@ -2519,6 +2647,19 @@ function compareNumbers(a, b) {
 // Helper: Return 1 for missing bonus data (to push error domains to the bottom), 0 otherwise.
 function isErrorDomain(info) {
     return info ? 0 : 1;
+}
+
+    function applySearchFilter() {
+    const searchValue = document.getElementById('sortSearchInput').value.toLowerCase().trim();
+    const cards = document.querySelectorAll('.site-card');
+    cards.forEach(card => {
+        const domain = card.getAttribute('data-domain') || "";
+        if (domain.toLowerCase().includes(searchValue)) {
+            card.style.display = "block";
+        } else {
+            card.style.display = "none";
+        }
+    });
 }
     // Update toggle buttons appearance
     function updateToggleButtons() {
