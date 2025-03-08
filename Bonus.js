@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         kkkonus Checker - Final Version
+// @name         Alannah Checker - Final Version
 // @namespace    http://example.com
-// @version      8.1
+// @version      8.2
 // @description  Uses login request approach for bonus data, maintains original GUI, auto-navigates to next URL without merchant ID
 // @updateURL    https://raw.githubusercontent.com/sinastry123/Bonus-checker/main/Bonus.js
 // @downloadURL  https://raw.githubusercontent.com/sinastry123/Bonus-checker/main/Bonus.js
