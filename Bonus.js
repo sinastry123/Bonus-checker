@@ -1,7 +1,8 @@
+
 // ==UserScript==
-// @name         Alannah Checker - Final Version
+// @name         Harry Checker - Final Version
 // @namespace    http://example.com
-// @version      8.7
+// @version      8.8
 // @description  Uses login request approach for bonus data, maintains original GUI, auto-navigates to next URL without merchant ID
 // @updateURL    https://raw.githubusercontent.com/sinastry123/Bonus-checker/main/Bonus.js
 // @downloadURL  https://raw.githubusercontent.com/sinastry123/Bonus-checker/main/Bonus.js
@@ -23,11 +24,11 @@
     // Right at the top of your script:
 if (window._bonusCheckerAlreadyLoaded) {
   // Stop if we’ve already run on this page load
-  console.log("[Bonus Checker] Script already initialized. Skipping...");
+  //("[Bonus Checker] Script already initialized. Skipping...");
   return;
 }
 window._bonusCheckerAlreadyLoaded = true;
-    const BATCH_SIZE = 130;
+    const BATCH_SIZE = 250;
     const CHECK_DELAY = 10;
     const CLEANUP_INTERVAL = 30000;
     let currentDomainCard = null;
@@ -35,6 +36,8 @@ window._bonusCheckerAlreadyLoaded = true;
     let lastValidListedDomain = null;
     let temporaryBonusData = {};
     let domainCredentials = JSON.parse(GM_getValue("domain_credentials", "{}"));
+    let isFetchingBonusData = false;
+
     // Adjust how much of the request body we store.
     const MAX_BODY_LENGTH = 0;
     // Only keep these headers.
@@ -71,7 +74,7 @@ let autoValidBonusType = GM_getValue("autoValidBonusType", "commission");
     let navigationScheduled = false;
     let checkLiveClickCount = 0; // Track the state of the Check Live button
     let showingLastData = false;
-let progressBarTimeout;
+
 
     // Override window.open so that it always redirects in the current tab.
 window.open = function(url, name, features) {
@@ -99,79 +102,441 @@ document.addEventListener('click', function(event) {
         return;
     }
 
-    function injectMinimizedStylesheet() {
-        // Remove any existing stylesheet
-        const existingStyle = document.getElementById('minimized-style');
-        if (existingStyle) existingStyle.remove();
+    // ====== MINIMIZED STATE FUNCTIONS ======
 
-        // Create a new stylesheet
-        const style = document.createElement('style');
-        style.id = 'minimized-style';
-        style.textContent = `
-            /* Hide these elements when minimized */
-            #bonus-checker-container.minimized #guiContent .header-controls,
-            #bonus-checker-container.minimized #resultsArea,
-            #bonus-checker-container.minimized #statusMessage,
-            #bonus-checker-container.minimized #bonus-checker-title,
-            #bonus-checker-container.minimized #progressBar,
-            #bonus-checker-container.minimized #heart-container {
-                display: none !important;
-            }
+/***********************************************
+ *             MINIMIZED STATE HELPERS         *
+ ***********************************************/
 
-            /* Show only the current domain card when minimized */
-            #bonus-checker-container.minimized {
-                height: auto !important;
-                width: auto !important;
-                max-height: none !important;
-                overflow: visible !important;
-                padding: 0 !important;
-                background: rgba(0,0,0,0.9) !important;
-            }
+function injectMinimizedStylesheet() {
+    const existingStyle = document.getElementById('minimized-style');
+    if (existingStyle) existingStyle.remove();
 
-            #bonus-checker-container.minimized #currentDomainCardContainer {
-                display: block !important;
-                position: relative !important;
-                margin: 0 !important;
-                max-width: 100% !important;
-            }
+    const style = document.createElement('style');
+    style.id = 'minimized-style';
+    style.textContent = `
+        /* Hide header controls, title, status, progress bar, hearts, etc. */
+        #bonus-checker-container.minimized #guiContent .header-controls,
+        #bonus-checker-container.minimized #bonus-checker-title,
+        #bonus-checker-container.minimized #statusMessage,
+        #bonus-checker-container.minimized #progressBar,
+        #bonus-checker-container.minimized #heart-container {
+            display: none !important;
+        }
+        /* Ensure the results area is visible when minimized (so we see the current domain card) */
+        #bonus-checker-container.minimized #resultsArea {
+            display: block !important;
+        }
+        /* Current domain card is shown in minimized mode, but smaller */
+        #bonus-checker-container.minimized .current-domain-card {
+            width: 100% !important;
+            max-height: 80px !important;
+            overflow-y: auto !important;
+            margin: 0 !important;
+            padding: 2px !important;
+            font-size: 10px !important;
+        }
+        /* We do NOT set display:none on #refreshLastMin and #nextDomainMin here! */
+        #refreshLastMin, #nextDomainMin {
+            position: absolute !important;
+            top: 2px !important;
+            z-index: 999999 !important;
+            padding: 4px 6px !important;
+            font-size: 10px !important;
+        }
+        #refreshLastMin { right: 80px !important; }
+        #nextDomainMin { right: 2px !important; }
 
-            #bonus-checker-container.minimized .current-domain-card {
-                width: 100% !important;
-                max-height: 80px !important;
-                overflow-y: auto !important;
-                margin: 0 !important;
-            }
+        /* Maximize button styling */
+        #maximizeTracker {
+            display: none;
+            position: absolute !important;
+            top: 2px !important;
+            right: 2px !important;
+            z-index: 999999 !important;
+        }
+        #bonus-checker-container.minimized #maximizeTracker {
+            display: block !important;
+        }
+    `;
+    document.head.appendChild(style);
+}
 
-            /* Make maximize button visible and properly positioned */
-            #maximizeTracker {
-                display: none;
-                position: absolute !important;
-                top: 2px !important;
-                right: 2px !important;
-                z-index: 999999 !important;
-            }
-
-            #bonus-checker-container.minimized #maximizeTracker {
-                display: block !important;
-            }
-        `;
-        document.head.appendChild(style);
+function applyMinimizedStateEarly() {
+    injectMinimizedStylesheet();
+    if (GM_getValue("minimized", false)) {
+        document.documentElement.classList.add('early-minimized');
+        //('[Bonus Checker] Early minimized state prepared');
     }
+}
+
+function minimizeResults() {
+    //("[Bonus Checker] Minimizing...");
+    const container = document.getElementById('bonus-checker-container');
+    if (!container) return;
+    container.classList.add('minimized');
+    GM_setValue("minimized", true);
+    try {
+        const state = JSON.parse(GM_getValue("guiState", "{}"));
+        state.minimized = true;
+        GM_setValue("guiState", JSON.stringify(state));
+    } catch (e) {
+        console.error("[Bonus Checker] Error saving minimized state", e);
+    }
+    // Hide extra buttons etc.
+    const refreshLastMinBtn = document.getElementById('refreshLastMin');
+    if (refreshLastMinBtn) refreshLastMinBtn.style.display = 'block';
+    const nextDomainMinBtn = document.getElementById('nextDomainMin');
+    if (nextDomainMinBtn) nextDomainMinBtn.style.display = 'block';
+    const maximizeBtn = document.getElementById('maximizeTracker');
+    if (maximizeBtn) maximizeBtn.style.display = 'block';
+
+    // *** NEW CODE: Remove all cards except the current domain card ***
+    const resultsArea = document.getElementById('resultsArea');
+    if (resultsArea) {
+        Array.from(resultsArea.children).forEach(child => {
+            if (!child.classList.contains("current-domain-card")) {
+                child.remove();
+            }
+        });
+    }
+    //("[Bonus Checker] UI minimized");
+}
+
+function maximizeResults() {
+    //("[Bonus Checker] Maximizing...");
+    const container = document.getElementById('bonus-checker-container');
+    if (!container) return;
+    container.classList.remove('minimized');
+    GM_setValue("minimized", false);
+    try {
+        const state = JSON.parse(GM_getValue("guiState", "{}"));
+        state.minimized = false;
+        GM_setValue("guiState", JSON.stringify(state));
+    } catch (e) {
+        console.error("[Bonus Checker] Error saving maximized state", e);
+    }
+    updateCurrentDomainCard();
+    // In maximized mode, hide the extra minimized buttons.
+    const refreshLastMinBtn = document.getElementById('refreshLastMin');
+    if (refreshLastMinBtn) refreshLastMinBtn.style.display = 'none';
+    const nextDomainMinBtn = document.getElementById('nextDomainMin');
+    if (nextDomainMinBtn) nextDomainMinBtn.style.display = 'none';
+    const maximizeBtn = document.getElementById('maximizeTracker');
+    if (maximizeBtn) maximizeBtn.style.display = 'none';
+    //("[Bonus Checker] UI maximized");
+}
+function setupMinimizeMaximizeButtons() {
+    //("[Bonus Checker] Setting up minimize/maximize buttons");
+    const minimizeBtn = document.getElementById('minimizeTracker');
+    const maximizeBtn = document.getElementById('maximizeTracker');
+    if (minimizeBtn) {
+        minimizeBtn.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            minimizeResults();
+            return false;
+        };
+    }
+    if (maximizeBtn) {
+        maximizeBtn.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            maximizeResults();
+            return false;
+        };
+    }
+    //("[Bonus Checker] Minimize/maximize buttons set up");
+}
+
+function initializeMinimizedState() {
+    //("[Bonus Checker] Initializing minimized state");
+    const minimized = GM_getValue("minimized", false);
+    const container = document.getElementById('bonus-checker-container');
+    if (!container) return;
+    if (minimized) {
+        container.classList.add('minimized');
+        //("[Bonus Checker] Container marked as minimized");
+    } else {
+        container.classList.remove('minimized');
+        //("[Bonus Checker] Container not minimized");
+    }
+    const maximizeBtn = document.getElementById('maximizeTracker');
+    if (maximizeBtn) {
+        maximizeBtn.style.display = minimized ? 'block' : 'none';
+    }
+}
+
+/***********************************************
+ *               CREATE GUI FUNCTION           *
+ ***********************************************/
+function createGUI() {
+    //("[Bonus Checker] Creating full GUI...");
+
+    // Apply early minimized styling.
+    applyMinimizedStateEarly();
+
+    // Main container.
+    let container = document.getElementById('bonus-checker-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'bonus-checker-container';
+        container.style.position = 'fixed';
+        container.style.top = '0';
+        container.style.left = '0';
+        container.style.right = '0';
+        container.style.zIndex = '999999';
+        container.style.maxHeight = '80vh';
+        container.style.overflowY = 'auto';
+        container.style.background = 'rgba(0,0,0,0.9)';
+        container.style.color = '#fff';
+        container.style.fontFamily = 'Helvetica, Arial, sans-serif';
+        container.style.borderBottom = '2px solid #ff1493';
+        container.style.boxShadow = '0 4px 8px rgba(0,0,0,0.5)';
+    }
+    if (GM_getValue("minimized", false)) {
+        container.classList.add('minimized');
+    }
+
+    // Heart container.
+    let heartsDiv = document.getElementById('heart-container');
+    if (!heartsDiv) {
+        heartsDiv = document.createElement('div');
+        heartsDiv.id = 'heart-container';
+        container.appendChild(heartsDiv);
+    }
+
+    // Main GUI content wrapper - use flex layout
+    let guiContent = document.getElementById('guiContent');
+    if (!guiContent) {
+        guiContent = document.createElement('div');
+        guiContent.id = 'guiContent';
+        guiContent.style.padding = '5px';
+        // Set flex layout for proper ordering
+        guiContent.style.display = 'flex';
+        guiContent.style.flexDirection = 'column';
+        container.appendChild(guiContent);
+    }
+
+    // Title header (order: 1)
+    let title = document.getElementById('bonus-checker-title');
+    if (!title) {
+        title = document.createElement('div');
+        title.id = 'bonus-checker-title';
+        title.textContent = 'ALANNAH';
+        title.style.fontSize = '22px';
+        title.style.fontWeight = 'bold';
+        title.style.textAlign = 'center';
+        title.style.marginBottom = '5px';
+        title.style.color = '#ff1493';
+        title.style.textShadow = '1px 1px 5px rgba(255,20,147,0.7)';
+        // Set order
+        title.style.order = '1';
+        guiContent.appendChild(title);
+    }
+
+    // Header controls container (order: 2)
+    let headerControls = document.querySelector('.header-controls');
+    if (!headerControls) {
+        headerControls = document.createElement('div');
+        headerControls.className = 'header-controls';
+        headerControls.style.width = '100%';
+        headerControls.style.boxSizing = 'border-box';
+        // Set order
+        headerControls.style.order = '2';
+        guiContent.appendChild(headerControls);
+    }
+
+    // Status message (order: 3) - placed between buttons and domain cards
+    let statusMessage = document.getElementById('statusMessage');
+    if (!statusMessage) {
+        statusMessage = document.createElement('div');
+        statusMessage.className = 'status-message';
+        statusMessage.id = 'statusMessage';
+        statusMessage.style.display = 'none'; // Hidden initially
+        // Set order
+        statusMessage.style.order = '3';
+        guiContent.appendChild(statusMessage);
+    }
+
+    // Row 1.
+    const row1 = document.createElement('div');
+    row1.className = 'header-row';
+    row1.innerHTML = `
+        <button id="editUrls" class="control-btn">Edit Domains</button>
+        <button id="fetchFreshBonusData" class="control-btn">Fetch Fresh Bonus</button>
+        <button id="showCachedBonuses" class="control-btn">Show Cached</button>
+        <button id="showCurrentDomainOnly" class="control-btn">Show Current</button>
+    `;
+    headerControls.appendChild(row1);
+
+    // Row 2.
+    const row2 = document.createElement('div');
+    row2.className = 'header-row';
+    row2.innerHTML = `
+        <button id="toggleAutoLogin" class="control-btn">Auto Login: OFF</button>
+        <button id="toggleAutoNavNonVisited" class="control-btn">Auto Non-Visited: OFF</button>
+        <button id="toggleAutoNavValid" class="control-btn">Auto Valid: OFF</button>
+        <button id="refreshLastBtn" class="control-btn">Refresh Last</button>
+    `;
+    headerControls.appendChild(row2);
+
+    // Row 3.
+    const row3 = document.createElement('div');
+    row3.className = 'header-row';
+    row3.innerHTML = `
+        <button id="toggleSortBtn" class="control-btn">Sort</button>
+        <button id="setDomainCredentials" class="control-btn">Set Domain Creds</button>
+        <button id="nextDomainBtn" class="control-btn">Next</button>
+        <button id="minimizeTracker" class="control-btn">Minimize</button>
+    `;
+    headerControls.appendChild(row3);
+
+    // Create minimized-mode extra buttons:
+    // Refresh Last (minimized)
+    let refreshLastMinBtn = document.getElementById('refreshLastMin');
+    if (!refreshLastMinBtn) {
+        refreshLastMinBtn = document.createElement('button');
+        refreshLastMinBtn.id = 'refreshLastMin';
+        refreshLastMinBtn.className = 'control-btn';
+        refreshLastMinBtn.textContent = 'Refresh Last';
+        refreshLastMinBtn.style.position = 'absolute';
+        refreshLastMinBtn.style.top = '2px';
+        refreshLastMinBtn.style.right = '110px';  // adjust as needed
+        refreshLastMinBtn.style.zIndex = '999999';
+        refreshLastMinBtn.style.width = 'auto';
+        refreshLastMinBtn.style.display = GM_getValue("minimized", false) ? 'block' : 'none';
+        refreshLastMinBtn.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            refreshLastVisited();
+        };
+        container.appendChild(refreshLastMinBtn);
+    }
+    // Next (minimized)
+    let nextDomainMinBtn = document.getElementById('nextDomainMin');
+    if (!nextDomainMinBtn) {
+        nextDomainMinBtn = document.createElement('button');
+        nextDomainMinBtn.id = 'nextDomainMin';
+        nextDomainMinBtn.className = 'control-btn';
+        nextDomainMinBtn.textContent = 'Next';
+        nextDomainMinBtn.style.position = 'absolute';
+        nextDomainMinBtn.style.top = '2px';
+        nextDomainMinBtn.style.right = '60px';  // adjust as needed
+        nextDomainMinBtn.style.zIndex = '999999';
+        nextDomainMinBtn.style.width = 'auto';
+        nextDomainMinBtn.style.display = GM_getValue("minimized", false) ? 'block' : 'none';
+        nextDomainMinBtn.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            goToNextDomain();
+        };
+        container.appendChild(nextDomainMinBtn);
+    }
+    // Maximize button.
+    let maximizeButton = document.getElementById('maximizeTracker');
+    if (!maximizeButton) {
+        maximizeButton = document.createElement('button');
+        maximizeButton.id = 'maximizeTracker';
+        maximizeButton.className = 'control-btn';
+        maximizeButton.textContent = 'Maximize';
+        maximizeButton.style.position = 'absolute';
+        maximizeButton.style.top = '2px';
+        maximizeButton.style.right = '2px';
+        maximizeButton.style.zIndex = '999999';
+        maximizeButton.style.width = 'auto';
+        maximizeButton.style.display = GM_getValue("minimized", false) ? 'block' : 'none';
+        container.appendChild(maximizeButton);
+    }
+
+    // Progress bar (order: 4)
+    
+
+    // Results area (order: 5)
+    let resultsArea = document.getElementById('resultsArea');
+    if (!resultsArea) {
+        resultsArea = document.createElement('div');
+        resultsArea.id = 'resultsArea';
+        // Set order
+        resultsArea.style.order = '5';
+        guiContent.appendChild(resultsArea);
+    }
+
+    // Attach container to body.
+    if (!document.body.contains(container)) {
+        document.body.appendChild(container);
+    }
+    guiElement = container;
+
+    // Floating hearts.
+    for (let i = 0; i < 20; i++) {
+        const heart = document.createElement('div');
+        heart.className = 'floating-heart';
+        heart.style.left = Math.random() * 100 + '%';
+        heart.style.animationDelay = (Math.random() * 5) + 's';
+        heart.style.animationDuration = (4 + Math.random() * 4) + 's';
+        heartsDiv.appendChild(heart);
+    }
+
+    // Add CSS so each header row is a 4-column grid.
+    const styleTag = document.createElement('style');
+    styleTag.textContent = `
+        .header-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 2px;
+            margin-bottom: 4px;
+        }
+        .control-btn {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 4px 6px;
+            font-size: 11px;
+            cursor: pointer;
+            background: rgba(0,0,0,0.6);
+            border: 1px solid #ff1493;
+            color: #fff;
+            transition: all 0.2s ease;
+            text-align: center;
+        }
+        .control-btn:hover {
+            background: #fff;
+            color: #ff1493;
+        }
+    `;
+    document.head.appendChild(styleTag);
+
+    // Hook up event listeners.
+    addListener(document.getElementById('editUrls'), 'click', openEditModal);
+    addListener(document.getElementById('fetchFreshBonusData'), 'click', fetchFreshBonusData);
+    addListener(document.getElementById('showCachedBonuses'), 'click', showCachedBonuses);
+    addListener(document.getElementById('showCurrentDomainOnly'), 'click', showCurrentDomainOnly);
+    addListener(document.getElementById('toggleAutoLogin'), 'click', toggleAutoLogin);
+    addListener(document.getElementById('toggleAutoNavNonVisited'), 'click', toggleNavNonVisited);
+    addListener(document.getElementById('toggleAutoNavValid'), 'click', toggleNavValid);
+    addListener(document.getElementById('refreshLastBtn'), 'click', refreshLastVisited);
+    addListener(document.getElementById('toggleSortBtn'), 'click', openSortOptionsPopup);
+    addListener(document.getElementById('setDomainCredentials'), 'click', openDomainCredentialsModal);
+    addListener(document.getElementById('nextDomainBtn'), 'click', goToNextDomain);
+    addListener(document.getElementById('minimizeTracker'), 'click', minimizeResults);
+    addListener(maximizeButton, 'click', maximizeResults);
+
+    updateToggleButtons && updateToggleButtons();
+    renderLastCapturedInfo && renderLastCapturedInfo();
+    updateSortButtonText && updateSortButtonText();
+
+    setupMinimizeMaximizeButtons();
+    initializeMinimizedState();
+
+    // Insert the current domain card.
+    updateCurrentDomainCard();
+
+    //("[Bonus Checker] GUI created.");
+}
+//
 
     // Apply early minimized state
-    function applyMinimizedStateEarly() {
-        // Read the minimized state before any other processing
-        const minimized = GM_getValue("minimized", false);
 
-        // Inject minimized stylesheet early
-        injectMinimizedStylesheet();
-
-        // If minimized, add an early indicator class to body
-        if (minimized) {
-            document.documentElement.classList.add('early-minimized');
-            console.log('[Bonus Checker] Early minimized state prepared');
-        }
-    }
 
     // Call this very early
 
@@ -180,104 +545,7 @@ document.addEventListener('click', function(event) {
     // Replace your existing minimizeResults function with this one
 // Replace your minimizeResults function with this version
 // Replace your minimizeResults function with this version
-function minimizeResults() {
-    console.log("[Bonus Checker] Minimizing...");
-    const container = document.getElementById('bonus-checker-container');
-    if (!container) {
-        console.error("[Bonus Checker] Container not found for minimize");
-        return;
-    }
 
-    // First force update of current domain card
-    createCurrentDomainCard();
-    updateCurrentDomainCard();
-
-    // Add the minimized class to change UI layout
-    container.classList.add('minimized');
-
-    // Make sure the current domain container is visible and properly styled
-    const currentDomainContainer = document.getElementById('currentDomainCardContainer');
-    if (currentDomainContainer) {
-        currentDomainContainer.style.display = 'block !important';
-        currentDomainContainer.style.visibility = 'visible';
-        currentDomainContainer.style.opacity = '1';
-        currentDomainContainer.style.zIndex = '9999';
-    }
-
-    // Show the minimized-mode buttons (Refresh Last, Next)
-    const refreshLastMinBtn = document.getElementById('refreshLastMin');
-    if (refreshLastMinBtn) {
-        refreshLastMinBtn.style.display = 'block';
-    }
-    const nextDomainMinBtn = document.getElementById('nextDomainMin');
-    if (nextDomainMinBtn) {
-        nextDomainMinBtn.style.display = 'block';
-    }
-    // (Maximize button is already hidden when minimized so it doesn't appear.)
-
-    // Save minimized state
-    GM_setValue("minimized", true);
-    try {
-        const state = JSON.parse(GM_getValue("guiState", "{}"));
-        state.minimized = true;
-        GM_setValue("guiState", JSON.stringify(state));
-    } catch (e) {
-        console.error("[Bonus Checker] Error saving minimized state to guiState", e);
-    }
-
-    console.log("[Bonus Checker] UI minimized and state saved");
-    startMinimizedBonusCheck();
-
-    // Final check - wait a brief moment then ensure the card is visible again
-    setTimeout(function() {
-        const currentDomainContainer = document.getElementById('currentDomainCardContainer');
-        if (currentDomainContainer) {
-            currentDomainContainer.style.display = 'block !important';
-            currentDomainContainer.style.visibility = 'visible';
-        }
-    }, 100);
-}
-
-// Replace your maximizeResults function with this version
-function maximizeResults() {
-    console.log("[Bonus Checker] Maximizing...");
-    const container = document.getElementById('bonus-checker-container');
-    if (!container) {
-        console.error("[Bonus Checker] Container not found for maximize");
-        return;
-    }
-    window.preventDataClearing = true;
-    container.classList.remove('minimized');
-    GM_setValue("minimized", false);
-    try {
-        const state = JSON.parse(GM_getValue("guiState", "{}"));
-        state.minimized = false;
-        GM_setValue("guiState", JSON.stringify(state));
-    } catch (e) {
-        console.error("[Bonus Checker] Error saving maximized state to guiState", e);
-    }
-    updateCurrentDomainCard();
-
-    // Hide the refresh-last button when maximized.
-    const refreshLastMinBtn = document.getElementById('refreshLastMin');
-    if (refreshLastMinBtn) {
-        refreshLastMinBtn.style.display = 'none';
-    }
-    // Hide the next button for minimized mode when maximized.
-    const nextDomainMinBtn = document.getElementById('nextDomainMin');
-    if (nextDomainMinBtn) {
-        nextDomainMinBtn.style.display = 'none';
-    }
-    // Hide the maximize button itself when maximized.
-    const maximizeBtn = document.getElementById('maximizeTracker');
-    if (maximizeBtn) {
-        maximizeBtn.style.display = 'none';
-    }
-    setTimeout(() => {
-        window.preventDataClearing = false;
-    }, 2000);
-    console.log("[Bonus Checker] UI maximized and state saved");
-}
 
 // Add this new function for periodic bonus checks in minimized mode
 function startMinimizedBonusCheck() {
@@ -293,7 +561,7 @@ function startMinimizedBonusCheck() {
         if (container && container.classList.contains('minimized')) {
             const currentDomain = getCurrentDisplayDomain();
             if (currentDomain) {
-                console.log(`[Bonus Checker] Periodic minimized check for ${currentDomain}`);
+                //(`[Bonus Checker] Periodic minimized check for ${currentDomain}`);
                 checkDomain(currentDomain).then(() => {
                     updateCurrentDomainCard();
                 });
@@ -311,7 +579,7 @@ function startMinimizedBonusCheck() {
 function clearTemporaryData() {
     const container = document.getElementById('bonus-checker-container');
     if (container && container.classList.contains('minimized')) {
-        console.log("[Bonus Checker] Minimised state active—skipping bonus data clearing.");
+        //("[Bonus Checker] Minimised state active—skipping bonus data clearing.");
         return;
     }
     // Optionally, you could also check if the current domain has any bonus data.
@@ -334,79 +602,7 @@ function clearTemporaryData() {
 
 
     // Setup minimize/maximize buttons with direct event handlers
-    function setupMinimizeMaximizeButtons() {
-        console.log("[Bonus Checker] Setting up minimize/maximize buttons");
 
-        // Get references to buttons
-        const minimizeBtn = document.getElementById('minimizeTracker');
-        const maximizeBtn = document.getElementById('maximizeTracker');
-
-        if (!minimizeBtn) {
-            console.error("[Bonus Checker] Minimize button not found in DOM");
-        }
-
-        if (!maximizeBtn) {
-            console.error("[Bonus Checker] Maximize button not found in DOM");
-        }
-
-        // Clear and rebind minimize button
-        if (minimizeBtn) {
-            minimizeBtn.onclick = function(e) {
-                console.log("[Bonus Checker] Minimize button clicked");
-                e.preventDefault();
-                e.stopPropagation();
-                minimizeResults();
-                return false;
-            };
-        }
-
-        // Clear and rebind maximize button
-        if (maximizeBtn) {
-            maximizeBtn.onclick = function(e) {
-                console.log("[Bonus Checker] Maximize button clicked");
-                e.preventDefault();
-                e.stopPropagation();
-                maximizeResults();
-                return false;
-            };
-        }
-
-        console.log("[Bonus Checker] Minimize/maximize buttons setup complete");
-    }
-
-    // Apply the proper minimized state on initialization
-    function initializeMinimizedState() {
-    console.log("[Bonus Checker] Initializing minimized state");
-    const minimized = GM_getValue("minimized", false);
-    console.log(`[Bonus Checker] Stored minimized state: ${minimized}`);
-    const container = document.getElementById('bonus-checker-container');
-    if (!container) {
-        console.error("[Bonus Checker] Container not found - cannot initialize minimized state");
-        return;
-    }
-    if (minimized) {
-        container.classList.add('minimized');
-        // Start the periodic bonus data check for minimized mode
-        startMinimizedBonusCheck();
-        // Force an immediate bonus data check for the current domain
-        const currentDomain = extractBaseDomain(window.location.href);
-        if (currentDomain) {
-            checkDomain(currentDomain).then(() => {
-                updateCurrentDomainCard();
-            });
-        }
-        console.log("[Bonus Checker] Applied minimized class to container");
-    } else {
-        container.classList.remove('minimized');
-        console.log("[Bonus Checker] Removed minimized class from container");
-    }
-    const maximizeBtn = document.getElementById('maximizeTracker');
-    if (maximizeBtn) {
-        maximizeBtn.style.display = minimized ? 'block' : 'none';
-    } else {
-        console.error("[Bonus Checker] Maximize button not found during minimized state init");
-    }
-}
 
     // Enhanced persistGUIState function that uses synchronous storage
     function persistGUIState() {
@@ -783,12 +979,23 @@ function clearTemporaryData() {
     }
 
     function cleanURLList(text) {
-        if (!text) return [];
-        return text.split(/[\n\s,]+/)
-            .map(line => extractBaseDomain(line.trim()))
-            .filter(Boolean)
-            .filter((domain, index, self) => self.indexOf(domain) === index);
-    }
+    if (!text) return [];
+    // Split by newline characters.
+    return text.split(/[\n\r]+/)
+        .map(line => line.trim())
+        // Only keep lines that match a basic URL pattern.
+        .filter(line => {
+            // This regex matches URLs that may or may not include the protocol.
+            // It checks for a valid domain name with a TLD.
+            const urlRegex = /^(https?:\/\/)?([\da-z.-]+\.[a-z.]{2,6})([\/\w .-]*)*\/?$/i;
+            return urlRegex.test(line);
+        })
+        // Convert each valid URL to its base domain.
+        .map(line => extractBaseDomain(line))
+        .filter(Boolean)
+        // Remove duplicates.
+        .filter((domain, index, self) => self.indexOf(domain) === index);
+}
 
     function addListener(el, evt, cb) {
         if (!el) return;
@@ -804,20 +1011,21 @@ function clearTemporaryData() {
 
     // Function to update status with color
     // Updated status indicator function with detailed statuses and a modern design.
-    function updateStatusWithColor(message, typeOrBoolean) {
+    // Updated status indicator function with detailed statuses, progress tracking, and proper positioning
+function updateStatusWithColor(message, typeOrBoolean, progressData) {
   const statusEl = document.getElementById('statusMessage');
   if (!statusEl) return;
 
-  // Make sure the status container is visible.
+  // Make sure the status container is visible
   statusEl.style.display = 'block';
   statusEl.style.opacity = '1';
 
-  // Clear any existing hide timer.
+  // Clear any existing hide timer
   if (window.statusHideTimeout) {
     clearTimeout(window.statusHideTimeout);
   }
 
-  // Determine type: if boolean true => success, false => error; otherwise use string if valid.
+  // Determine type: if boolean true => success, false => error; otherwise use string if valid
   let type = 'info';
   if (typeof typeOrBoolean === 'boolean') {
     type = typeOrBoolean ? 'success' : 'error';
@@ -828,59 +1036,144 @@ function clearTemporaryData() {
     }
   }
 
-  // Set styling based on type.
+  // Set styling based on type
   let icon = '';
   let bgColor = '';
   let borderColor = '';
+  let textColor = '#fff';
   switch (type) {
     case 'success':
-      icon = "✔️";
-      // Use the pink valid bonus card colors.
+      icon = "✓";
       bgColor = "rgba(255,20,147,0.2)";
       borderColor = "#ff1493";
       break;
     case 'error':
-      icon = "❌";
-      // Use black for error messages.
+      icon = "✕";
       bgColor = "rgba(0,0,0,0.8)";
-      borderColor = "#000";
+      borderColor = "#ff4444";
       break;
     case 'warning':
-      icon = "⚠️";
+      icon = "⚠";
       bgColor = "rgba(255,165,0,0.2)";
       borderColor = "orange";
       break;
     case 'info':
     default:
-      icon = "ℹ️";
+      icon = "ℹ";
       bgColor = "rgba(0,0,0,0.6)";
       borderColor = "#ccc";
       break;
   }
 
-  // Update the status element's content and styles.
+  // Format any progress data if provided
+  let progressHtml = '';
+  if (progressData) {
+    const { processed, total } = progressData;
+    if (processed !== undefined && total !== undefined) {
+      const percent = Math.min(100, Math.round((processed / total) * 100));
+      progressHtml = `
+        <div class="status-progress">
+          <div class="status-progress-text">${processed}/${total} (${percent}%)</div>
+          <div class="status-progress-bar">
+            <div class="status-progress-fill" style="width: ${percent}%"></div>
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  // Update the status element's content and styles
   statusEl.innerHTML = `
-    <div style="font-size: 16px; font-weight: bold; margin-bottom: 5px;">
-      Status: ${icon}
+    <div class="status-icon">${icon}</div>
+    <div class="status-content">
+      <div class="status-message-text">${message}</div>
+      ${progressHtml}
     </div>
-    <div style="font-size: 14px;">${message}</div>
   `;
+
+  // Apply enhanced styling
   statusEl.style.backgroundColor = bgColor;
   statusEl.style.border = `1px solid ${borderColor}`;
   statusEl.style.borderRadius = "5px";
   statusEl.style.padding = "10px";
+  statusEl.style.display = "flex";
+  statusEl.style.alignItems = "flex-start";
+  statusEl.style.gap = "10px";
   statusEl.style.boxShadow = "0 2px 4px rgba(0,0,0,0.3)";
-  statusEl.style.color = "#fff";
+  statusEl.style.color = textColor;
   statusEl.style.fontFamily = "'Helvetica Neue', Helvetica, Arial, sans-serif";
+  statusEl.style.margin = "5px 0 10px 0";
+  statusEl.style.position = "relative";
+  statusEl.style.zIndex = "1000";
 
-  // Hide the status message after 3 seconds (fade out).
-  window.statusHideTimeout = setTimeout(() => {
-    statusEl.style.transition = "opacity 1s ease-out";
-    statusEl.style.opacity = '0';
-    setTimeout(() => {
-      statusEl.style.display = 'none';
-    }, 1000);
-  }, 3000);
+  // Find and style the icon
+  const iconEl = statusEl.querySelector('.status-icon');
+  if (iconEl) {
+    iconEl.style.fontSize = "16px";
+    iconEl.style.fontWeight = "bold";
+    iconEl.style.width = "24px";
+    iconEl.style.height = "24px";
+    iconEl.style.display = "flex";
+    iconEl.style.alignItems = "center";
+    iconEl.style.justifyContent = "center";
+    iconEl.style.borderRadius = "50%";
+    iconEl.style.backgroundColor = borderColor;
+    iconEl.style.color = "#fff";
+    iconEl.style.flexShrink = "0";
+  }
+
+  // Style the content container
+  const contentEl = statusEl.querySelector('.status-content');
+  if (contentEl) {
+    contentEl.style.flex = "1";
+    contentEl.style.display = "flex";
+    contentEl.style.flexDirection = "column";
+    contentEl.style.gap = "5px";
+  }
+
+  // Find and style the message text
+  const textEl = statusEl.querySelector('.status-message-text');
+  if (textEl) {
+    textEl.style.fontSize = "14px";
+    textEl.style.lineHeight = "1.4";
+  }
+
+  // Style the progress bar
+  const progressBarEl = statusEl.querySelector('.status-progress-bar');
+  if (progressBarEl) {
+    progressBarEl.style.height = "4px";
+    progressBarEl.style.width = "100%";
+    progressBarEl.style.backgroundColor = "rgba(0,0,0,0.3)";
+    progressBarEl.style.borderRadius = "2px";
+    progressBarEl.style.overflow = "hidden";
+  }
+
+  // Style the progress fill
+  const progressFillEl = statusEl.querySelector('.status-progress-fill');
+  if (progressFillEl) {
+    progressFillEl.style.height = "100%";
+    progressFillEl.style.backgroundColor = borderColor;
+    progressFillEl.style.transition = "width 0.3s ease";
+  }
+
+  // Style the progress text
+  const progressTextEl = statusEl.querySelector('.status-progress-text');
+  if (progressTextEl) {
+    progressTextEl.style.fontSize = "12px";
+    progressTextEl.style.textAlign = "right";
+    progressTextEl.style.marginBottom = "2px";
+  }
+
+  // Only auto-hide for success messages, keep others visible
+  if (type === 'success') {
+    window.statusHideTimeout = setTimeout(() => {
+      statusEl.style.transition = "opacity 1s ease-out";
+      statusEl.style.opacity = '0';
+      setTimeout(() => {
+        statusEl.style.display = 'none';
+      }, 1000);
+    }, 5000); // Show success messages for 5 seconds
+  }
 }
 
     // Function to update all cards
@@ -1028,7 +1321,7 @@ function updateCheckLiveButton() {
             : `<span style="color:red;">No</span>`;
     }
 
-    
+
     /***********************************************
      *      BONUS DATA TRANSFORMATION FUNC         *
      ***********************************************/
@@ -1145,31 +1438,25 @@ function updateCheckLiveButton() {
     // New function: checks every second (up to 5 times) whether bonus data is present for the current domain.
     // If not, it calls fetchBonusDataForDomain to force a new fetch.
     function checkBonusDataIfMissing() {
-        const currentDomain = getCurrentDisplayDomain();
-        let attempts = 0;
-
-        function tryFetch() {
-            attempts++;
-            // If bonus data is available, we're done.
-            if (temporaryBonusData[currentDomain]) {
-                updateStatusWithColor(`Bonus data found for ${currentDomain} on attempt ${attempts}`, true);
-                return;
-            }
-            updateStatusWithColor(`No bonus data for ${currentDomain} yet — attempt ${attempts} of 5. Refreshing...`, true);
-
-            // Use the same method as your Refresh Last button:
-            checkDomain(currentDomain).then(() => {
-                // If still missing and we haven't exceeded our attempts, try again in 1 second.
-                if (!temporaryBonusData[currentDomain] && attempts < 5) {
-                    setTimeout(tryFetch, 1000);
-                } else if (!temporaryBonusData[currentDomain]) {
-                    updateStatusWithColor(`After ${attempts} attempts, still no bonus data for ${currentDomain}.`, false);
-                }
-            });
+    const currentDomain = getCurrentDisplayDomain();
+    let attempts = 0;
+    function tryFetch() {
+        attempts++;
+        if (temporaryBonusData[currentDomain]) {
+            updateStatusWithColor(`Bonus data found for ${currentDomain} on attempt ${attempts}`, true);
+            return;
         }
-
-        setTimeout(tryFetch, 1000);
+        updateStatusWithColor(`No bonus data for ${currentDomain} yet — attempt ${attempts} of 5. Refreshing...`, true);
+        checkDomain(currentDomain).then(() => {
+            if (!temporaryBonusData[currentDomain] && attempts < 5) {
+                setTimeout(tryFetch, 0); // Removed delay
+            } else if (!temporaryBonusData[currentDomain]) {
+                updateStatusWithColor(`After ${attempts} attempts, still no bonus data for ${currentDomain}.`, false);
+            }
+        });
     }
+    setTimeout(tryFetch, 0); // Start immediately
+}
 
     // Function to claim a bonus for a specific domain
     function claimBonus(domain, bonusType) {
@@ -1383,7 +1670,7 @@ function updateCheckLiveButton() {
      *                   STYLES                    *
      ***********************************************/
 
-GM_addStyle(`
+  GM_addStyle(`
 /* MAIN CONTAINER (barely transparent) */
 #bonus-checker-container {
     position: fixed;
@@ -1428,14 +1715,6 @@ GM_addStyle(`
     margin-bottom: 5px;
     color: #ff1493;
     text-shadow: 1px 1px 5px rgba(255,20,147,0.7);
-}
-
-/* HEADER CONTROLS (grid) */
-.header-controls {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 2px;
-    margin-bottom: 4px;
 }
 
 /* SITE CARDS - Extremely compact */
@@ -1641,17 +1920,83 @@ GM_addStyle(`
     transition: width 0.3s ease;
 }
 
-/* Status message styling */
+/* Status message styling - ENHANCED WITH POSITIONING */
 #statusMessage {
     padding: 0;
-    margin-bottom: 10px;
+    margin: 8px 0;
     transition: all 0.3s ease;
+    position: relative;
+    z-index: 1001;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    order: 3; /* Ensures it appears below the header controls */
 }
+
 #statusMessage.active {
     padding: 10px;
     background-color: rgba(255, 20, 147, 0.2);
     border: 1px solid #ff1493;
     border-radius: 5px;
+}
+
+/* Status icon styling */
+.status-icon {
+    font-size: 16px;
+    font-weight: bold;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background-color: #ff1493;
+    color: #fff;
+    flex-shrink: 0;
+}
+
+/* Status content container */
+.status-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+/* Status message text styling */
+.status-message-text {
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+/* Status progress bar styling */
+.status-progress {
+    margin-top: 2px;
+}
+
+.status-progress-text {
+    font-size: 12px;
+    text-align: right;
+    margin-bottom: 2px;
+}
+
+.status-progress-bar {
+    height: 4px;
+    width: 100%;
+    background-color: rgba(0,0,0,0.3);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.status-progress-fill {
+    height: 100%;
+    background-color: #ff1493;
+    transition: width 0.3s ease;
+}
+
+/* Hide any status indicators at the bottom right */
+.status-indicator {
+    display: none !important;
 }
 
 /* MODAL OVERLAY STYLES */
@@ -1662,7 +2007,7 @@ GM_addStyle(`
     right: 0;
     bottom: 0;
     background: rgba(0,0,0,0.8);
-    z-index: 2147483648;
+    z-index: 21474836468;
     display: none;
     justify-content: center;
     align-items: center;
@@ -1746,7 +2091,8 @@ GM_addStyle(`
 /* CURRENT DOMAIN CARD SPECIFIC STYLES */
 #currentDomainCardContainer {
     position: relative !important;
-    z-index: 1000 !important;
+    z-index: 999 !important; /* Lower than status message */
+    margin-top: 8px !important;
     margin-bottom: 8px !important;
     background: rgba(0,0,0,0.1);
     border-bottom: 1px solid #ff1493;
@@ -1804,284 +2150,71 @@ GM_addStyle(`
     display: block !important;
 }
 
-`);
+#maximizeTracker,
+#refreshLastMin,
+#nextDomainMin {
+    width: auto !important;
+    position: absolute !important;
+    top: 2px !important;
+    z-index: 999999 !important;
+    padding: 4px 6px !important;
+    font-size: 10px !important;
+}
 
+/* NEW RULE: Always display the next button in minimized mode */
+#bonus-checker-container.minimized #nextDomainMin {
+    display: block !important;
+    /* Adjusted spacing */
+    right: 70px !important;
+}
+
+/* Positioning for maximize, next, and refresh buttons */
+#maximizeTracker {
+    right: 2px !important;
+}
+/* Global rule for refreshLastMin when not in minimized mode */
+#refreshLastMin {
+    right: 130px !important;
+}
+/* Override: in minimized mode, move refresh button just a little bit closer to next button */
+#bonus-checker-container.minimized #refreshLastMin {
+    right: 135px !important;
+}
+#nextDomainMin {
+    right: 70px !important;
+}
+
+/* Make sure these buttons are not hidden by the global .control-btn rule */
+.control-btn {
+    width: auto !important;
+}
+
+/* Force the status message to appear BETWEEN buttons and domain cards */
+#guiContent {
+    display: flex;
+    flex-direction: column;
+}
+
+.header-controls {
+    order: 2;
+}
+
+#statusMessage {
+    order: 3;
+}
+
+#currentDomainCardContainer {
+    order: 4;
+}
+
+#resultsArea {
+    order: 5;
+}
+`);
     /***********************************************
      *               GUI CREATION                  *
      ***********************************************/
-    function createGUI() {
-    console.log("[Bonus Checker] Creating GUI...");
-    if (guiElement) {
-        console.log("[Bonus Checker] GUI already exists, skipping creation");
-        return;
-    }
 
-    // Check if we should start minimized
-    const startMinimized = GM_getValue("minimized", false);
-    console.log(`[Bonus Checker] Start minimized setting: ${startMinimized}`);
-
-    // Main container
-    let container = document.getElementById('bonus-checker-container');
-    if (!container) {
-        container = document.createElement('div');
-        container.id = 'bonus-checker-container';
-    }
-
-    // Apply minimized class if needed
-    if (startMinimized) {
-        container.classList.add('minimized');
-        console.log("[Bonus Checker] Added minimized class to container during creation");
-    }
-
-    // Create heart container
-    let heartsDiv = document.getElementById('heart-container');
-    if (!heartsDiv) {
-        heartsDiv = document.createElement('div');
-        heartsDiv.id = 'heart-container';
-        container.appendChild(heartsDiv);
-    }
-
-    // Create main GUI content wrapper
-    let guiContent = document.getElementById('guiContent');
-    if (!guiContent) {
-        guiContent = document.createElement('div');
-        guiContent.id = 'guiContent';
-        container.appendChild(guiContent);
-    }
-
-    // Create title
-    let title = document.getElementById('bonus-checker-title');
-    if (!title) {
-        title = document.createElement('div');
-        title.id = 'bonus-checker-title';
-        title.textContent = 'ALANNAH';
-        guiContent.appendChild(title);
-    }
-
-    // Create header controls
-    let headerControls = document.querySelector('.header-controls');
-    if (!headerControls) {
-        headerControls = document.createElement('div');
-        headerControls.className = 'header-controls';
-        headerControls.innerHTML = `
-            <button id="editUrls" class="control-btn">Edit Domains</button>
-            <button id="checkBonuses" class="control-btn">Check Live</button>
-            <button id="refreshLastBtn" class="control-btn">Refresh Last</button>
-            <button id="nextDomainBtn" class="control-btn">Next</button>
-            <button id="showValidBonusesBtn" class="control-btn">Show Valid</button>
-            <button id="toggleAutoLogin" class="control-btn">Auto Login: OFF</button>
-            <button id="toggleAutoNavNonVisited" class="control-btn">Auto Non-Visited: OFF</button>
-            <button id="toggleAutoNavValid" class="control-btn">Auto Valid: OFF</button>
-            <button id="minimizeTracker" class="control-btn">_</button>
-            <button id="toggleSortBtn" class="control-btn">Sort</button>
-            <button id="setDomainCredentials" class="control-btn">Set Domain Creds</button>
-            <button id="clearWithinRangeBtn" class="control-btn">Clear Range</button>
-        `;
-        guiContent.appendChild(headerControls);
-    }
-
-    // Create the maximize button - add directly on container for accessibility.
-    let maximizeButton = document.getElementById('maximizeTracker');
-    if (!maximizeButton) {
-        maximizeButton = document.createElement('button');
-        maximizeButton.id = 'maximizeTracker';
-        maximizeButton.className = 'control-btn';
-        maximizeButton.textContent = 'Maximize';
-        maximizeButton.style.position = 'absolute';
-        maximizeButton.style.top = '2px';
-        maximizeButton.style.right = '2px';
-        maximizeButton.style.zIndex = '999999';
-        maximizeButton.style.display = startMinimized ? 'block' : 'none';
-        container.appendChild(maximizeButton);
-    }
-
-    // Create a refresh-last button for minimized mode.
-    let refreshLastMinBtn = document.getElementById('refreshLastMin');
-    if (!refreshLastMinBtn) {
-        refreshLastMinBtn = document.createElement('button');
-        refreshLastMinBtn.id = 'refreshLastMin';
-        refreshLastMinBtn.className = 'control-btn';
-        refreshLastMinBtn.textContent = 'Refresh Last';
-        refreshLastMinBtn.style.position = 'absolute';
-        refreshLastMinBtn.style.top = '2px';
-        // Positioned at 80px from the right (gap of 78px from maximize at right:2px)
-        refreshLastMinBtn.style.right = '80px';
-        refreshLastMinBtn.style.zIndex = '999999';
-        refreshLastMinBtn.style.display = startMinimized ? 'block' : 'none';
-        refreshLastMinBtn.onclick = function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            refreshLastVisited();
-            return false;
-        };
-        container.appendChild(refreshLastMinBtn);
-    }
-
-    // Create a Next button for minimized mode next to Refresh Last.
-    let nextDomainMinBtn = document.getElementById('nextDomainMin');
-    if (!nextDomainMinBtn) {
-        nextDomainMinBtn = document.createElement('button');
-        nextDomainMinBtn.id = 'nextDomainMin';
-        nextDomainMinBtn.className = 'control-btn';
-        nextDomainMinBtn.textContent = 'Next';
-        nextDomainMinBtn.style.position = 'absolute';
-        nextDomainMinBtn.style.top = '2px';
-        // Set the spacing: maximize is at right:2px, refresh last at right:80px (gap 78px), so next should be at right:80px+78px = 158px.
-        nextDomainMinBtn.style.right = '175px';
-        nextDomainMinBtn.style.zIndex = '999999';
-        nextDomainMinBtn.style.display = startMinimized ? 'block' : 'none';
-        nextDomainMinBtn.onclick = function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            goToNextDomain();
-            return false;
-        };
-        container.appendChild(nextDomainMinBtn);
-    }
-
-    // Create progress bar
-    let progressBar = document.getElementById('progressBar');
-    if (!progressBar) {
-        progressBar = document.createElement('div');
-        progressBar.className = 'progress-bar';
-        progressBar.id = 'progressBar';
-        progressBar.innerHTML = '<div class="progress-fill" id="progressFill"></div>';
-        guiContent.appendChild(progressBar);
-    }
-
-    // Create status message
-    let statusMessage = document.getElementById('statusMessage');
-    if (!statusMessage) {
-        statusMessage = document.createElement('div');
-        statusMessage.className = 'status-message';
-        statusMessage.id = 'statusMessage';
-        guiContent.appendChild(statusMessage);
-    }
-
-    // Create results area
-    let resultsArea = document.getElementById('resultsArea');
-    if (!resultsArea) {
-        resultsArea = document.createElement('div');
-        resultsArea.id = 'resultsArea';
-        guiContent.appendChild(resultsArea);
-    }
-
-    // Create or reuse the dedicated current domain card container.
-    let currentDomainContainer = document.getElementById('currentDomainCardContainer');
-    if (!currentDomainContainer) {
-        currentDomainContainer = document.createElement('div');
-        currentDomainContainer.id = 'currentDomainCardContainer';
-        // Insert this container at the top of the guiContent.
-        guiContent.insertBefore(currentDomainContainer, resultsArea);
-    }
-
-    // Attach container to document body if not already attached.
-    if (!document.body.contains(container)) {
-        document.body.appendChild(container);
-    }
-    guiElement = container;
-    console.log("[Bonus Checker] Main container added to body");
-
-    // Create floating hearts
-    for (let i = 0; i < 20; i++) {
-        const heart = document.createElement('div');
-        heart.className = 'floating-heart';
-        heart.style.left = Math.random() * 100 + '%';
-        heart.style.animationDelay = (Math.random() * 5) + 's';
-        heart.style.animationDuration = (4 + Math.random() * 4) + 's';
-        heartsDiv.appendChild(heart);
-    }
-    console.log("[Bonus Checker] Hearts created");
-
-    // CREATE AND APPEND THE MODAL OVERLAY & DIALOG OUTSIDE MAIN GUI
-    let modalOverlay = document.getElementById('modalOverlay');
-    if (!modalOverlay) {
-        modalOverlay = document.createElement('div');
-        modalOverlay.className = 'modal-overlay';
-        modalOverlay.id = 'modalOverlay';
-        document.body.appendChild(modalOverlay);
-    }
-    let urlModal = document.getElementById('urlModal');
-    if (!urlModal) {
-        urlModal = document.createElement('div');
-        urlModal.className = 'url-modal';
-        urlModal.id = 'urlModal';
-        urlModal.innerHTML = `
-            <textarea id="urlList" class="url-textarea" placeholder="Enter domains (one per line)"></textarea>
-            <div class="credentials-section">
-                <label for="apiPhone">Phone Number for API Login:</label>
-                <input type="text" id="apiPhone" placeholder="Phone Number" value="${defaultPhone}">
-                <label for="apiPassword">Password for API Login:</label>
-                <input type="password" id="apiPassword" placeholder="Password" value="${defaultPassword}">
-            </div>
-            <div style="display: flex; justify-content: flex-end; gap: 8px;">
-                <button id="saveUrls" class="control-btn">Save</button>
-                <button id="cancelUrls" class="control-btn">Cancel</button>
-            </div>
-        `;
-        modalOverlay.appendChild(urlModal);
-    }
-
-    // Create range modal
-    createRangeModal();
-
-    // Direct event handlers for minimize/maximize buttons
-    const minBtn = document.getElementById('minimizeTracker');
-    if (minBtn) {
-        minBtn.onclick = function(e) {
-            console.log("[Bonus Checker] Minimize button clicked");
-            e.preventDefault();
-            e.stopPropagation();
-            minimizeResults();
-            return false;
-        };
-        console.log("[Bonus Checker] Minimize button handler added");
-    } else {
-        console.error("[Bonus Checker] Minimize button not found!");
-    }
-
-    if (maximizeButton) {
-        maximizeButton.onclick = function(e) {
-            console.log("[Bonus Checker] Maximize button clicked");
-            e.preventDefault();
-            e.stopPropagation();
-            maximizeResults();
-            return false;
-        };
-        console.log("[Bonus Checker] Maximize button handler added");
-    } else {
-        console.error("[Bonus Checker] Maximize button not found!");
-    }
-
-    // Hook up event listeners for the modal overlay and URL modal buttons.
-    addListener(document.getElementById('modalOverlay'), 'click', (e) => {
-        if (e.target === modalOverlay) {
-            closeEditModal();
-        }
-    });
-    addListener(document.getElementById('saveUrls'), 'click', saveEditedUrls);
-    addListener(document.getElementById('cancelUrls'), 'click', closeEditModal);
-
-    // Hook up event listeners for the header control buttons.
-    addListener(guiContent.querySelector('#editUrls'), 'click', openEditModal);
-    addListener(guiContent.querySelector('#checkBonuses'), 'click', checkAllBonuses);
-    addListener(guiContent.querySelector('#refreshLastBtn'), 'click', refreshLastVisited);
-    addListener(guiContent.querySelector('#nextDomainBtn'), 'click', goToNextDomain);
-    addListener(guiContent.querySelector('#showValidBonusesBtn'), 'click', showValidBonuses);
-    addListener(guiContent.querySelector('#toggleAutoLogin'), 'click', toggleAutoLogin);
-    addListener(guiContent.querySelector('#toggleAutoNavNonVisited'), 'click', toggleNavNonVisited);
-    addListener(guiContent.querySelector('#toggleAutoNavValid'), 'click', toggleNavValid);
-    addListener(guiContent.querySelector('#toggleSortBtn'), 'click', openSortOptionsPopup);
-    addListener(guiContent.querySelector('#setDomainCredentials'), 'click', openDomainCredentialsModal);
-    addListener(guiContent.querySelector('#clearWithinRangeBtn'), 'click', openRangeModal);
-
-    // Perform final UI updates
-    updateToggleButtons();
-    renderLastCapturedInfo();
-    updateSortButtonText();
-
-    console.log(`[Bonus Checker] GUI created. Starting minimized: ${startMinimized}`);
-}
 
     // 4. Add these functions for the domain-specific credentials modal
     function createDomainCredentialsModal() {
@@ -2488,7 +2621,7 @@ function sortDomainCards() {
   otherCards.forEach(card => {
     const domain = card.getAttribute('data-domain');
     const info = temporaryBonusData[domain];
-    console.log("Sorting domain:", domain, "Info:", info);
+    //("Sorting domain:", domain, "Info:", info);
   });
 
   otherCards.sort((a, b) => {
@@ -2831,28 +2964,33 @@ function isErrorDomain(info) {
 
     // Updated toggleNavNonVisited to immediately start navigation
     function toggleNavNonVisited() {
-        autoNavNonVisited = !autoNavNonVisited;
-        GM_setValue("autoNavNonVisited", autoNavNonVisited);
-        updateToggleButtons();
+    autoNavNonVisited = !autoNavNonVisited;
+    GM_setValue("autoNavNonVisited", autoNavNonVisited);
 
-        if (autoNavNonVisited) {
-            updateStatusWithColor("Auto navigation enabled - will automatically move to next non-visited domain", true);
-
-            // Check if current domain already has merchant ID
-            const currentDomain = extractBaseDomain(window.location.href);
-            if (currentDomain && merchantIdData[currentDomain]?.merchantId) {
-                // We already have merchant ID, go to next domain that needs it
-                setTimeout(goToNextDomain, 1000);
-            } else if (currentDomain && domainList.includes(currentDomain)) {
-                // Current domain needs merchant ID - wait for it to be captured
-                updateStatusWithColor(`Waiting for merchant ID on ${currentDomain}`, true);
-
-                // Already being captured by the XHR interception
-            }
-        } else {
-            updateStatusWithColor("Auto navigation disabled", false);
-        }
+    // When autoNavNonVisited is enabled, force autoNavValid to false.
+    if (autoNavNonVisited) {
+        autoNavValid = false;
+        GM_setValue("autoNavValid", false);
     }
+
+    updateToggleButtons();
+
+    if (autoNavNonVisited) {
+        updateStatusWithColor("Auto navigation enabled - will automatically move to next non-visited domain", true);
+
+        // Check if current domain already has merchant ID
+        const currentDomain = extractBaseDomain(window.location.href);
+        if (currentDomain && merchantIdData[currentDomain]?.merchantId) {
+            // We already have merchant ID, go to next domain that needs it
+            setTimeout(goToNextDomain, 1000);
+        } else if (currentDomain && domainList.includes(currentDomain)) {
+            // Current domain needs merchant ID - wait for it to be captured
+            updateStatusWithColor(`Waiting for merchant ID on ${currentDomain}`, true);
+        }
+    } else {
+        updateStatusWithColor("Auto navigation disabled", false);
+    }
+}
 
     function toggleNavValid() {
   openAutoValidOptionsPopup();
@@ -2904,44 +3042,40 @@ function createCurrentDomainCard() {
     function checkAndCaptureBonusDataAfterLoad() {
     const currentDomain = extractBaseDomain(window.location.href);
     if (!domainList.includes(currentDomain)) {
-        console.log(`[Bonus Checker] Current domain (${currentDomain}) is not in the list. Skipping bonus capture.`);
-        // Update the UI with the last valid domain’s bonus data.
+        //(`[Bonus Checker] ${currentDomain} is not in the list. Skipping bonus capture.`);
         updateCurrentDomainCard();
         return;
     }
-    // Otherwise, proceed with capture logic.
     let attempts = 0;
     const maxAttempts = 5;
 
     function attemptCapture() {
         attempts++;
-        console.log(`[Bonus Checker] Attempt ${attempts}/${maxAttempts} to capture bonus data for ${currentDomain}`);
+        //(`[Bonus Checker] Attempt ${attempts}/${maxAttempts} to capture bonus data for ${currentDomain}`);
         if (temporaryBonusData[currentDomain]) {
-            console.log(`[Bonus Checker] Bonus data already exists for ${currentDomain}`);
+            //(`[Bonus Checker] Bonus data already exists for ${currentDomain}`);
             return;
         }
         if (!merchantIdData[currentDomain]?.merchantId) {
-            console.log(`[Bonus Checker] No merchant ID for ${currentDomain} yet, waiting...`);
+            //(`[Bonus Checker] No merchant ID for ${currentDomain} yet, retrying immediately...`);
             if (attempts < maxAttempts) {
-                setTimeout(attemptCapture, 1000);
+                attemptCapture(); // Call immediately with no delay
             }
             return;
         }
-        // Force capture via syncData.
+        // We have a merchant ID; try to fetch bonus data.
         const merchantId = merchantIdData[currentDomain].merchantId;
         const accessId = merchantIdData[currentDomain].accessId || "";
         const accessToken = merchantIdData[currentDomain].accessToken || "";
         if (accessId && accessToken) {
-            console.log(`[Bonus Checker] Using tokens to fetch bonus data for ${currentDomain}`);
+            //(`[Bonus Checker] Using tokens to fetch bonus data for ${currentDomain}`);
             forceSyncDataCapture(currentDomain, merchantId, accessId, accessToken);
         } else if (attempts < maxAttempts) {
-            console.log(`[Bonus Checker] No tokens available, attempting login for ${currentDomain}`);
-            tryDomainLogin(currentDomain, () => {
-                setTimeout(attemptCapture, 1000);
-            });
+            //(`[Bonus Checker] No tokens available, attempting login for ${currentDomain}`);
+            tryDomainLogin(currentDomain, attemptCapture);
         }
     }
-    setTimeout(attemptCapture, 1000);
+    attemptCapture();
 }
 
 // Helper function to force a syncData capture using existing tokens
@@ -2969,7 +3103,7 @@ function forceSyncDataCapture(domain, merchantId, accessId, accessToken) {
             try {
                 let parsed = JSON.parse(response.responseText);
                 if (parsed.status === "SUCCESS" && parsed.data) {
-                    console.log(`[Bonus Checker] Successfully captured bonus data for ${domain}`);
+                    //(`[Bonus Checker] Successfully captured bonus data for ${domain}`);
                     const bonusData = filterBonuses(parsed, domain);
                     temporaryBonusData[domain] = bonusData;
 
@@ -2981,7 +3115,7 @@ function forceSyncDataCapture(domain, merchantId, accessId, accessToken) {
                     lastCapturedBonus = parsed.data;
                     renderLastCapturedInfo();
                 } else {
-                    console.log(`[Bonus Checker] Failed to capture bonus data: ${parsed.message || 'Unknown error'}`);
+                    //(`[Bonus Checker] Failed to capture bonus data: ${parsed.message || 'Unknown error'}`);
                     if (parsed.message && parsed.message.toLowerCase().includes("token")) {
                         // Token is likely invalid, clear it for future login attempt
                         delete merchantIdData[domain].accessId;
@@ -3039,7 +3173,7 @@ function tryDomainLogin(domain, callback) {
             try {
                 let resp = JSON.parse(response.responseText);
                 if (resp.status === "SUCCESS" && resp.data.token && resp.data.id) {
-                    console.log(`[Bonus Checker] Login successful for ${domain}`);
+                    //(`[Bonus Checker] Login successful for ${domain}`);
 
                     // Store the credentials
                     merchantIdData[domain].accessId = resp.data.id;
@@ -3118,60 +3252,7 @@ function tryDomainLogin(domain, callback) {
 
     // Update progress bar
     // Updated progress bar function with smooth animation and 100% fill on completion
-    function updateProgress() {
-  const bar = document.getElementById('progressBar');
-  const fill = document.getElementById('progressFill');
-  if (!bar || !fill) {
-    console.error("Progress bar elements not found.");
-    return;
-  }
 
-  // Use totalSites if available; otherwise, fallback to the length of domainList.
-  let total = (typeof totalSites === "number" && totalSites > 0) ? totalSites : domainList.length;
-  let processed = (typeof processedCount === "number") ? processedCount : 0;
-
-  // Log the current progress (for debugging)
-  console.log("updateProgress: processed =", processed, "total =", total);
-
-  // If no sites to process, hide the progress bar immediately.
-  if (total <= 0) {
-    bar.style.display = "none";
-    fill.style.width = "0%";
-    return;
-  }
-
-  // Always show the progress bar when there's work to do.
-  bar.style.display = "block";
-
-  // Calculate progress percentage.
-  let progressPercent = (processed / total) * 100;
-  if (progressPercent > 100) {
-    progressPercent = 100;
-  }
-
-  // Clear any existing timeout so we don't hide the bar prematurely.
-  if (progressBarTimeout) {
-    clearTimeout(progressBarTimeout);
-    progressBarTimeout = null;
-  }
-
-  // Update the fill width with a smooth transition.
-  fill.style.transition = "width 0.5s ease-out";
-  fill.style.width = progressPercent + "%";
-
-  // If progress is 0%, hide the progress bar immediately.
-  if (progressPercent === 0) {
-    bar.style.display = "none";
-  }
-
-  // If progress is complete (100%), schedule hiding the bar 2 seconds later.
-  if (progressPercent === 100) {
-    progressBarTimeout = setTimeout(() => {
-      bar.style.display = "none";
-      fill.style.width = "0%";
-    }, 2000);
-  }
-}
 
     /***********************************************
      *               SORT FUNCTIONALITY            *
@@ -3252,57 +3333,66 @@ function tryDomainLogin(domain, callback) {
     // Fixed version - checks if USER key already exists with valid token
     // Simplified version - just checks if USER key exists with any data
     // Updated version that uses domain-specific credentials if available
-    function tryAutoLogin() {
-  if (!autoLogin) return false;
+    function tryAutoLogin(domain, callback) {
+  domain = domain || getCurrentDisplayDomain();
 
-  // Always normalize the domain
-  const rawDomain = extractBaseDomain(window.location.href);
-  if (!rawDomain || !domainList.includes(rawDomain)) {
-    updateStatusWithColor(`Current domain is not in your list. Auto-login skipped.`, false);
-    return false;
-  }
-
-  // Already logged in?
-  const userDataStr = localStorage.getItem("USER");
-  let userData = null;
-  if (userDataStr && userDataStr.trim().length > 0) {
+  // Check if USER already exists in localStorage.
+  const storedUser = localStorage.getItem("USER");
+  if (storedUser) {
     try {
-      userData = JSON.parse(userDataStr);
+      const userData = JSON.parse(storedUser);
+      if (userData && userData.token) {
+        updateStatusWithColor(`[AutoLogin] Already logged in for ${domain}. Skipping auto-login.`, 'success');
+        if (callback) callback();
+        return;
+      }
     } catch (e) {
-      userData = null;
+      updateStatusWithColor(`[AutoLogin] Error parsing stored USER data: ${e.message}. Proceeding with login.`, 'error');
     }
   }
-  if (userData && userData.token && userData.id) {
-    updateStatusWithColor(`Already logged in for ${rawDomain}.`, true);
-    return true;
+
+  const merchantData = merchantIdData[domain];
+  if (!merchantData || !merchantData.merchantId) {
+    updateStatusWithColor(`[AutoLogin] Missing merchant ID for ${domain}. Cannot auto-login.`, 'error');
+    if (callback) callback();
+    return;
   }
 
-  // Check we have a merchant ID for this domain
-  const merchantId = merchantIdData[rawDomain]?.merchantId;
-  if (!merchantId) {
-    updateStatusWithColor(`Cannot auto-login on ${rawDomain} - no merchant ID captured yet.`, false);
-    return false;
+  // If tokens are already stored, use them.
+  if (merchantData.accessToken && merchantData.accessId) {
+    updateStatusWithColor(`[AutoLogin] Found stored tokens for ${domain}. Using them.`, 'info');
+    const userData = {
+      token: merchantData.accessToken,
+      id: merchantData.accessId,
+      timestamp: Date.now()
+    };
+    localStorage.setItem("USER", JSON.stringify(userData));
+    updateStatusWithColor(`[AutoLogin] USER object set in localStorage for ${domain}.`, 'info');
+    forceSyncDataCapture(domain, merchantData.merchantId, merchantData.accessId, merchantData.accessToken);
+    updateStatusWithColor(`[AutoLogin] Sent syncData request with stored tokens for ${domain}.`, 'info');
+    setTimeout(() => {
+      updateStatusWithColor(`[AutoLogin] Reloading page for ${domain} to update login state.`, 'info');
+      window.location.reload();
+    }, 1000);
+    if (callback) callback();
+    return;
   }
 
-  // Use domain-specific credentials if they exist, else use defaults
-  const domainCreds = domainCredentials[rawDomain] || {
-    phone: defaultPhone,
-    password: defaultPassword
-  };
-
-  // Prepare the login POST params
+  // Otherwise, proceed to perform the login request.
+  updateStatusWithColor(`[AutoLogin] No stored tokens for ${domain}. Initiating login request...`, 'info');
+  const domainCreds = domainCredentials[domain] || { phone: defaultPhone, password: defaultPassword };
   let params = new URLSearchParams();
-  params.set("mobile",       domainCreds.phone);
-  params.set("password",     domainCreds.password);
-  params.set("module",       "/users/login");
-  params.set("merchantId",   merchantId);
-  params.set("domainId",     "0");
-  params.set("accessId",     "");
-  params.set("accessToken",  "");
-  params.set("walletIsAdmin","");
+  params.set("mobile", domainCreds.phone);
+  params.set("password", domainCreds.password);
+  params.set("module", "/users/login");
+  params.set("merchantId", merchantData.merchantId);
+  params.set("domainId", "0");
+  params.set("accessId", "");
+  params.set("accessToken", "");
+  params.set("walletIsAdmin", "");
 
-  let loginUrl = `https://${rawDomain}/api/v1/index.php`;
-  updateStatusWithColor(`Performing auto-login for ${rawDomain}...`, true);
+  let loginUrl = `https://${domain}/api/v1/index.php`;
+  updateStatusWithColor(`[AutoLogin] Sending login request to ${loginUrl} for ${domain}.`, 'info');
 
   GM_xmlhttpRequest({
     method: "POST",
@@ -3314,45 +3404,44 @@ function tryDomainLogin(domain, callback) {
     data: params.toString(),
     timeout: 10000,
     onload: function(response) {
+      updateStatusWithColor(`[AutoLogin] Received login response for ${domain}.`, 'info');
       try {
         let resp = JSON.parse(response.responseText);
-        if (resp.status === "SUCCESS" && resp.data.token && resp.data.id) {
-          updateStatusWithColor(`Auto-login successful for ${rawDomain}. Refreshing page...`, true);
-
-          // ***** STORE TOKENS UNDER THE SAME DOMAIN KEY *****
-          merchantIdData[rawDomain].accessId    = resp.data.id;
-          merchantIdData[rawDomain].accessToken = resp.data.token;
+        if (String(resp.status).toUpperCase() === "SUCCESS" && resp.data && resp.data.token && resp.data.id) {
+          updateStatusWithColor(`[AutoLogin] Login successful for ${domain}. Capturing tokens...`, 'success');
+          merchantData.accessId = resp.data.id;
+          merchantData.accessToken = resp.data.token;
           GM_setValue("merchant_id_data", JSON.stringify(merchantIdData));
-
-          // Optionally also store in localStorage as "USER"
-          const newUserData = {
+          // Store login state in localStorage.
+          const userData = {
             token: resp.data.token,
             id: resp.data.id,
             timestamp: Date.now()
           };
-          localStorage.setItem("USER", JSON.stringify(newUserData));
-
-          // Refresh page after a short delay so the new token is used
+          localStorage.setItem("USER", JSON.stringify(userData));
+          updateStatusWithColor(`[AutoLogin] Tokens stored. Requesting syncData for ${domain}.`, 'info');
+          forceSyncDataCapture(domain, merchantData.merchantId, resp.data.id, resp.data.token);
           setTimeout(() => {
+            updateStatusWithColor(`[AutoLogin] Reloading page for ${domain} after login.`, 'info');
             window.location.reload();
           }, 1000);
-
         } else {
-          updateStatusWithColor(`Auto-login failed for ${rawDomain}: ${resp.message || 'Unknown error'}`, false);
+          updateStatusWithColor(`[AutoLogin] Login failed for ${domain}: ${resp.message || 'Unknown error'}`, 'error');
         }
       } catch (e) {
-        updateStatusWithColor(`Parse error during auto-login for ${rawDomain}: ${e.message}`, false);
+        updateStatusWithColor(`[AutoLogin] Parse error during login for ${domain}: ${e.message}`, 'error');
       }
+      if (callback) callback();
     },
     onerror: function() {
-      updateStatusWithColor(`Network error during auto-login for ${rawDomain}`, false);
+      updateStatusWithColor(`[AutoLogin] Network error during login for ${domain}.`, 'error');
+      if (callback) callback();
     },
     ontimeout: function() {
-      updateStatusWithColor(`Login timeout for ${rawDomain}`, false);
+      updateStatusWithColor(`[AutoLogin] Login request timed out for ${domain}.`, 'error');
+      if (callback) callback();
     }
   });
-
-  return false;
 }
 
     // Function to verify if a domain's token is valid
@@ -3512,254 +3601,292 @@ function tryDomainLogin(domain, callback) {
     // Modified checkAllBonuses function with current domain card always shown
     // Modified checkAllBonuses function with current domain card always shown
    async function checkAllBonuses() {
-    // Cycle the click count (0, 1, 2)
-    checkLiveClickCount = (checkLiveClickCount + 1) % 3;
-    updateCheckLiveButton();
+    // In this updated version, we simply call fetchFreshBonusData().
+    fetchFreshBonusData();
+}
 
-    const results = document.getElementById('resultsArea');
-    const container = document.getElementById('bonus-checker-container');
-    const currentDomain = getCurrentDisplayDomain();
-    const isMinimized = container && container.classList.contains('minimized');
 
-    // CRITICAL FIX: Always ensure current domain card exists and is visible before doing anything else
+    async function fetchNewBonusData() {
+    // Clear previous state
+    activeChecks.clear();
+    processedCount = 0;
+
+    // Ensure current domain card exists
     createCurrentDomainCard();
-    updateCurrentDomainCard();
 
-    // Force current domain container to be visible with important styles when minimized
-    if (isMinimized) {
-        const currentDomainContainer = document.getElementById('currentDomainCardContainer');
-        if (currentDomainContainer) {
-            currentDomainContainer.setAttribute('style',
-                'display: block !important; visibility: visible !important; opacity: 1 !important; position: relative !important; z-index: 9999 !important;');
-        }
-    }
+    // Process every domain from your list (even if merchant data is missing)
+    const validDomains = domainList;
+    totalSites = validDomains.length;
+    
 
-    if (checkLiveClickCount === 1) {
-        // FIRST CLICK: Show cached bonus data if available.
-        if (container) container.classList.remove('live-check-mode');
-        try {
-            const savedData = GM_getValue("cached_bonus_data", "{}");
-            const storedBonusData = JSON.parse(savedData);
-            if (Object.keys(storedBonusData).length > 0) {
-                showingLastData = true;
-                updateStatusWithColor(`Showing cached bonus data. Click "Check Live" again to fetch fresh data.`, true);
-
-                // Remove all children except the current domain container.
-                if (results) {
-                    Array.from(results.children).forEach(child => {
-                        if (child.id !== 'currentDomainCardContainer') {
-                            child.remove();
-                        }
-                    });
-                }
-
-                // Ensure current domain card is visible and updated
-                updateCurrentDomainCard(currentDomain);
-
-                // Process cached bonus data for other domains.
-                for (const domain in storedBonusData) {
-                    if (domain === currentDomain) continue;
-                    const bonusData = storedBonusData[domain];
-                    bonusData.isStoredData = true;
-                    temporaryBonusData[domain] = bonusData;
-                    updateBonusDisplay(bonusData, `https://${domain}`);
-                }
-
-                const timestamp = GM_getValue("cached_bonus_timestamp", "Unknown");
-                const dateStr = timestamp !== "Unknown" ? new Date(parseInt(timestamp)).toLocaleString() : "Unknown";
-                updateStatusWithColor(`Displaying cached bonus data saved at ${dateStr}. Click "Check Live" again to fetch fresh data.`, true);
-
-                sortDomainCards();
-
-                // CRITICAL FIX: Re-ensure visibility of current domain container after all operations
-                if (isMinimized) {
-                    const currentDomainContainer = document.getElementById('currentDomainCardContainer');
-                    if (currentDomainContainer) {
-                        currentDomainContainer.setAttribute('style',
-                            'display: block !important; visibility: visible !important; opacity: 1 !important; position: relative !important; z-index: 9999 !important;');
-                    }
-                }
-
-                return;
-            } else {
-                updateStatusWithColor(`No cached bonus data found. Fetching fresh data...`, true);
-                checkLiveClickCount = 2;
-                updateCheckLiveButton();
-            }
-        } catch (e) {
-            console.error("Error loading cached bonus data:", e);
-            updateStatusWithColor(`Error loading cached data. Fetching fresh data...`, false);
-            checkLiveClickCount = 2;
-            updateCheckLiveButton();
-        }
-    }
-
-    if (checkLiveClickCount === 2) {
-        // SECOND CLICK: Fetch fresh bonus data.
-        if (container) container.classList.remove('live-check-mode');
-        showingLastData = false;
-        updateStatusWithColor(`Fetching fresh bonus data...`, true);
-        await fetchNewBonusData();
-
-        // CRITICAL FIX: Re-ensure current domain card visibility after fetching data
-        if (isMinimized) {
-            const currentDomainContainer = document.getElementById('currentDomainCardContainer');
-            if (currentDomainContainer) {
-                currentDomainContainer.setAttribute('style',
-                    'display: block !important; visibility: visible !important; opacity: 1 !important; position: relative !important; z-index: 9999 !important;');
-                updateCurrentDomainCard();
-            }
-        }
-
+    if (totalSites === 0) {
+        updateStatusWithColor('No domains found in your list.', 'warning');
+        isFetchingBonusData = false;
         return;
     }
 
-    if (checkLiveClickCount === 0) {
-        // THIRD CLICK: Enable live-check mode so only the current domain container remains visible.
-        showingLastData = false;
-        if (container) container.classList.add('live-check-mode');
-        if (results) {
-            Array.from(results.children).forEach(child => {
-                if (child.id !== 'currentDomainCardContainer') {
-                    child.remove();
-                }
-            });
-        }
-
-        // Ensure current domain card is visible
-        updateCurrentDomainCard();
-
-        // CRITICAL FIX: Re-ensure current domain card visibility
-        if (isMinimized) {
-            const currentDomainContainer = document.getElementById('currentDomainCardContainer');
-            if (currentDomainContainer) {
-                currentDomainContainer.setAttribute('style',
-                    'display: block !important; visibility: visible !important; opacity: 1 !important; position: relative !important; z-index: 9999 !important;');
-            }
-        }
-
-        updateStatusWithColor("Cleared bonus cards (current domain remains visible).", true);
+    // Create batches based on BATCH_SIZE defined at the top
+    const batches = [];
+    for (let i = 0; i < validDomains.length; i += BATCH_SIZE) {
+        batches.push(validDomains.slice(i, i + BATCH_SIZE));
     }
 
-    // CRITICAL FIX: Add one final check with a timeout to ensure visibility
-    setTimeout(() => {
-        if (isMinimized) {
-            const currentDomainContainer = document.getElementById('currentDomainCardContainer');
-            if (currentDomainContainer) {
-                currentDomainContainer.setAttribute('style',
-                    'display: block !important; visibility: visible !important; opacity: 1 !important; position: relative !important; z-index: 9999 !important;');
-            }
+    updateStatusWithColor(
+        `Processing ${validDomains.length} domains in ${batches.length} batches of up to ${BATCH_SIZE} domains each`,
+        'info',
+        { processed: 0, total: totalSites }
+    );
+
+    // Process each batch
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        const batchStart = Date.now();
+
+        updateStatusWithColor(
+            `Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} domains)`,
+            'info',
+            { processed: processedCount, total: totalSites }
+        );
+
+        // Process all domains in this batch concurrently
+        await Promise.all(batch.map(domain =>
+            checkDomain(domain, true).then(() => {
+                // Update UI immediately for this domain
+                updateBonusDisplay(temporaryBonusData[domain], `https://${domain}`);
+                processedCount++;
+                
+            }).catch(error => {
+                console.error(`Error checking domain ${domain}:`, error);
+                updateBonusDisplay(null, `https://${domain}`, `Error: ${error.message || 'Unknown error'}`);
+                processedCount++;
+                
+            })
+        ));
+
+        const batchDuration = ((Date.now() - batchStart) / 1000).toFixed(1);
+        updateStatusWithColor(
+            `Completed batch ${batchIndex + 1}/${batches.length} in ${batchDuration}s`,
+            'success',
+            { processed: processedCount, total: totalSites }
+        );
+    }
+
+    // Save fresh bonus data for domains that returned data
+    const freshBonusData = {};
+    validDomains.forEach(domain => {
+        if (temporaryBonusData[domain]) {
+            freshBonusData[domain] = temporaryBonusData[domain];
         }
-    }, 500);
+    });
+
+    try {
+        GM_setValue("cached_bonus_data", JSON.stringify(freshBonusData));
+        GM_setValue("cached_bonus_timestamp", Date.now().toString());
+        updateStatusWithColor(
+            'All checks completed. Data saved for next time.',
+            'success',
+            { processed: totalSites, total: totalSites }
+        );
+        visitedDomains = [];
+        GM_setValue("visitedDomains", visitedDomains);
+    } catch (e) {
+        console.error("Error saving bonus data:", e);
+        updateStatusWithColor(
+            'Error saving bonus data to cache.',
+            'error',
+            { processed: processedCount, total: totalSites }
+        );
+    }
+
+    sortDomainCards();
+    updateCurrentDomainCard();
 }
 
-    async function fetchNewBonusData() {
-  // Clear any previous processing state.
+// Improved checkDomain function with better retry logic and timeout handling
+
+
+    // Main function that triggers the batch processing
+// Global variable to track if a fetch operation is in progress
+
+async function fetchFreshBonusData() {
+  if (isFetchingBonusData) {
+    updateStatusWithColor(`[FetchBonus] Bonus data fetch already in progress. Please wait...`, 'warning');
+    return;
+  }
+  isFetchingBonusData = true;
+  showingLastData = false;
   activeChecks.clear();
   processedCount = 0;
   totalSites = domainList.length;
-  updateProgress();
 
-  // Create and update the current domain card first.
-  createCurrentDomainCard();
-  updateCurrentDomainCard();
+  updateStatusWithColor(`[FetchBonus] Initiating bonus data fetch for ${totalSites} domains.`, 'info', { processed: 0, total: totalSites });
 
-  // Clear out the temporary bonus data before fetching fresh data.
-  temporaryBonusData = {};
-
-  // Create a new object to hold fresh data.
-  let freshBonusData = {};
-
-  // Only check domains that have a merchant ID captured.
-  const domainsWithMerchantId = domainList.filter(domain => merchantIdData[domain]?.merchantId);
-
-  if (domainsWithMerchantId.length === 0) {
-    updateStatusWithColor("No domains have merchant IDs captured yet. Please visit and capture merchant IDs first.", false);
-    return;
-  }
-
-  updateStatusWithColor(`Checking ${domainsWithMerchantId.length} domains with merchant IDs...`, true);
-
-  // Clear the results area but preserve the current domain container.
-  const resultsArea = document.getElementById('resultsArea');
-  if (resultsArea) {
-    Array.from(resultsArea.children).forEach(child => {
-      if (child.id !== 'currentDomainCardContainer') {
-        child.remove();
-      }
-    });
-  }
-
-  // Check if minimized
+  // Ensure GUI is in live-check mode.
   const container = document.getElementById('bonus-checker-container');
-  const isMinimized = container && container.classList.contains('minimized');
+  if (container) container.classList.remove('live-check-mode');
 
-  // If minimized, ensure current domain container is visible.
-  if (isMinimized) {
-    const currentDomainContainer = document.getElementById('currentDomainCardContainer');
-    if (currentDomainContainer) {
-      currentDomainContainer.style.display = 'block';
-    }
+  // Divide domains into batches.
+  const batches = [];
+  for (let i = 0; i < domainList.length; i += BATCH_SIZE) {
+    batches.push(domainList.slice(i, i + BATCH_SIZE));
+  }
+  updateStatusWithColor(`[FetchBonus] Divided domains into ${batches.length} batch(es).`, 'info');
+
+  // Process each batch sequentially.
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const batch = batches[batchIndex];
+    const batchStartTime = Date.now();
+    updateStatusWithColor(`[FetchBonus] Starting batch ${batchIndex + 1}/${batches.length} (${batch.length} domains).`, 'info', { processed: processedCount, total: totalSites });
+
+    await Promise.all(batch.map(domain =>
+      checkDomain(domain, true)
+        .then(() => {
+          processedCount++;
+          updateBonusDisplay(temporaryBonusData[domain], `https://${domain}`);
+          updateStatusWithColor(`[FetchBonus] Processed ${processedCount}/${totalSites} domains so far.`, 'info', { processed: processedCount, total: totalSites });
+        })
+        .catch(error => {
+          console.error(`[FetchBonus] Error checking ${domain}:`, error);
+          processedCount++;
+          updateBonusDisplay(null, `https://${domain}`, `Error: ${error.message || 'Unknown error'}`);
+          updateStatusWithColor(`[FetchBonus] Processed ${processedCount}/${totalSites} domains (with errors).`, 'warning', { processed: processedCount, total: totalSites });
+        })
+    ));
+
+    const batchDuration = ((Date.now() - batchStartTime) / 1000).toFixed(1);
+    updateStatusWithColor(`[FetchBonus] Completed batch ${batchIndex + 1}/${batches.length} in ${batchDuration}s.`, 'success', { processed: processedCount, total: totalSites });
   }
 
-  // Process domains in batches, forcing refresh each time.
-  for (let i = 0; i < domainsWithMerchantId.length; i += BATCH_SIZE) {
-    const batch = domainsWithMerchantId.slice(i, i + BATCH_SIZE);
-    await Promise.all(batch.map(domain => {
-      activeChecks.add(domain);
-      // Force refresh the bonus data.
-      return checkDomain(domain, true).then(() => {
-        if (temporaryBonusData[domain]) {
-          freshBonusData[domain] = temporaryBonusData[domain];
-        }
-      });
-    }));
-
-    // Ensure current domain card remains updated and visible, especially in minimized mode.
-    updateCurrentDomainCard();
-    if (isMinimized) {
-      const currentDomainContainer = document.getElementById('currentDomainCardContainer');
-      if (currentDomainContainer) {
-        currentDomainContainer.style.display = 'block';
-      }
+  // Save fresh bonus data to persistent cache.
+  const freshBonusData = {};
+  domainList.forEach(domain => {
+    if (temporaryBonusData[domain]) {
+      freshBonusData[domain] = temporaryBonusData[domain];
     }
-
-    await new Promise(resolve => setTimeout(resolve, CHECK_DELAY));
-  }
-
-  // For domains without merchant IDs, show an error.
-  const domainsWithoutMerchantId = domainList.filter(domain => !merchantIdData[domain]?.merchantId);
-  domainsWithoutMerchantId.forEach(domain => {
-    updateBonusDisplay(null, `https://${domain}`, 'No merchant ID data');
   });
 
-  // Save the fresh bonus data to storage.
   try {
     GM_setValue("cached_bonus_data", JSON.stringify(freshBonusData));
     GM_setValue("cached_bonus_timestamp", Date.now().toString());
-    updateStatusWithColor('All checks completed. Data saved for next time.', true);
-
-    // Clear the visited domains list for a new cycle.
-    visitedDomains = [];
-    GM_setValue("visitedDomains", visitedDomains);
+    updateStatusWithColor(`[FetchBonus] Bonus data saved to cache. Proceeding to sort domains.`, 'info', { processed: totalSites, total: totalSites });
   } catch (e) {
-    console.error("Error saving bonus data:", e);
-    updateStatusWithColor('Error saving bonus data to cache.', false);
+    console.error(`[FetchBonus] Error saving bonus data:`, e);
+    updateStatusWithColor(`[FetchBonus] Error saving bonus data to cache.`, 'error', { processed: processedCount, total: totalSites });
   }
 
+  updateStatusWithColor(`[FetchBonus] Sorting domain cards by ${sortMode}...`, 'info');
   sortDomainCards();
-
-  // Final check to ensure current domain card is visible.
   updateCurrentDomainCard();
-  if (isMinimized) {
-    const currentDomainContainer = document.getElementById('currentDomainCardContainer');
-    if (currentDomainContainer) {
-      currentDomainContainer.style.display = 'block';
-    }
-  }
+
+  // Count the errors by checking domains with an "error" property.
+  const errorCount = domainList.filter(domain =>
+    temporaryBonusData[domain] && temporaryBonusData[domain].error
+  ).length;
+
+  updateStatusWithColor(`[FetchBonus] Fetch complete. Processed ${totalSites} domains with ${errorCount} error(s). Domains are now sorted by ${sortMode}.`, 'success', { processed: totalSites, total: totalSites });
+
+  isFetchingBonusData = false;
 }
 
-    function updateBonusDisplay(bonusData, url, error, forceShowAll = false) {
+// Wrapper function to handle any errors during batch processing
+async function showCurrentDomainOnly() {
+    const results = document.getElementById('resultsArea');
+    if (!results) return;
+
+    // Keep only the current domain card
+    const currentDomain = getCurrentDisplayDomain();
+    const cards = document.querySelectorAll('.site-card');
+    let count = 0;
+
+    cards.forEach(card => {
+        const domain = card.getAttribute('data-domain');
+        if (!domain || domain !== currentDomain) {
+            if (!card.classList.contains('current-domain-card')) {
+                card.style.display = 'none';
+            }
+        } else {
+            count++;
+            card.style.display = 'block';
+        }
+    });
+
+    updateStatusWithColor(`Showing only current domain: ${currentDomain}`, true);
+
+    // Force update of the current domain card
+    updateCurrentDomainCard();
+}
+
+    // New function: "showCachedBonuses" loads cached bonus data and displays it.
+function showCachedBonuses() {
+    try {
+        // Use stored minimized state to decide what to display.
+        const isMinimized = GM_getValue("minimized", false);
+        const savedData = GM_getValue("cached_bonus_data", "{}");
+        const storedBonusData = JSON.parse(savedData);
+        const resultsArea = document.getElementById("resultsArea");
+
+        if (isMinimized) {
+            updateStatusWithColor("GUI minimized – showing only current domain bonus data.", true);
+            if (resultsArea) {
+                resultsArea.innerHTML = "";
+            }
+            updateCurrentDomainCard();
+            return;
+        }
+
+        // If not minimized, proceed to display cached bonus data for all domains.
+        if (Object.keys(storedBonusData).length > 0) {
+            showingLastData = true;
+            updateStatusWithColor("Displaying cached bonus data.", true);
+            if (resultsArea) {
+                // Clear the results area completely.
+                resultsArea.innerHTML = "";
+            }
+            // Add the current domain card.
+            updateCurrentDomainCard();
+            const currentDomain = getCurrentDisplayDomain();
+            // Loop through the cached data for domains other than the current one.
+            for (const domain in storedBonusData) {
+                if (domain === currentDomain) continue;
+                let bonusData = storedBonusData[domain];
+                bonusData.isStoredData = true;
+                temporaryBonusData[domain] = bonusData;
+                updateBonusDisplay(bonusData, `https://${domain}`);
+            }
+            sortDomainCards();
+        } else {
+            showingLastData = false;
+            updateStatusWithColor("No cached bonus data found.", false);
+        }
+    } catch (e) {
+        showingLastData = false;
+        console.error("Error loading cached bonus data:", e);
+        updateStatusWithColor("Error loading cached data.", false);
+    }
+}
+
+// New helper function to bind claim button and card clicks.
+function setupCardAndClaimClicks(card, domain) {
+  // Bind claim buttons: stop propagation and call claimBonus.
+  const claimButtons = card.querySelectorAll('.claim-btn');
+  claimButtons.forEach(function(button) {
+    button.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const bonusType = button.getAttribute('data-type');
+      claimBonus(domain, bonusType);
+    });
+  });
+  // Bind card click: if the click did not come from a claim button, navigate to the domain.
+  card.addEventListener('click', function(e) {
+    if (!e.target.closest('.claim-btn')) {
+      window.location.href = `https://${domain}`;
+    }
+  });
+}
+
+// Full updated updateBonusDisplay function.
+function updateBonusDisplay(bonusData, url, error, forceShowAll = false) {
     const results = document.getElementById('resultsArea');
     if (!results) return;
 
@@ -3938,174 +4065,133 @@ function tryDomainLogin(domain, callback) {
     // Function to update bonus display with styling for cached/fresh data
        // Helper function to add cache indicator to cards
   function updateCurrentDomainCard(domainOverride) {
-    // Use the override if provided; otherwise, use the default current display domain.
-    const displayDomain = domainOverride || getCurrentDisplayDomain();
-    if (!displayDomain) return;
+  const displayDomain = domainOverride || getCurrentDisplayDomain();
+  if (!displayDomain) return;
+  const resultsArea = document.getElementById('resultsArea');
+  if (!resultsArea) return;
 
-    // Always use the dedicated container.
-    const container = document.getElementById('currentDomainCardContainer');
-    if (!container) return;
+  // Remove any existing current domain card by id.
+  const existingCard = resultsArea.querySelector('#currentDomainCardContainer');
+  if (existingCard) {
+    existingCard.remove();
+  }
 
-    // Ensure the container is visible, especially important in minimized mode.
-    container.style.display = 'block';
+  let card = document.createElement('div');
+  card.id = 'currentDomainCardContainer';
+  card.className = 'site-card current-domain-card';
+  card.setAttribute('data-domain', displayDomain);
 
-    // Check if we're in minimized mode.
-    const mainContainer = document.getElementById('bonus-checker-container');
-    const isMinimized = mainContainer && mainContainer.classList.contains('minimized');
+  // Prepare merchant ID display.
+  let merchantIdStatus = "";
+  if (merchantIdData[displayDomain] && merchantIdData[displayDomain].merchantId) {
+    merchantIdStatus = `<div style="color: #4CAF50;">Merchant ID: ${merchantIdData[displayDomain].merchantId}</div>`;
+  } else {
+    merchantIdStatus = `<div style="color: #ff4444;">Waiting for merchant ID...</div>`;
+  }
 
-    // If minimized, ensure the container has proper styling.
-    if (isMinimized) {
-        container.style.position = 'relative';
-        container.style.zIndex = '1000';
-        container.style.margin = '0';
-        container.style.maxWidth = '100%';
-    }
+  const bonusData = temporaryBonusData[displayDomain];
 
-    // Clear the container so that no duplicate current cards exist.
-    container.innerHTML = '';
+  // Local helper functions to format bonus info.
+  function formatCommissionIndicator(c) {
+    return c && c.amount > 0
+      ? `<span style="color:lime;">Yes</span><strong style="color:#ffd700;"> (${c.amount})</strong>`
+      : `<span style="color:red;">No</span>`;
+  }
+  function formatBonusIndicator(amount) {
+    return amount && amount > 0
+      ? `<span style="color:lime;">Yes</span><strong style="color:#ffd700;"> (${amount})</strong>`
+      : `<span style="color:red;">No</span>`;
+  }
 
-    // Create the current domain card.
-    let card = document.createElement('div');
-    card.className = 'site-card current-domain-card';
-    card.setAttribute('data-domain', displayDomain);
-
-    // Bind click so that clicking navigates to the domain.
-    card.onclick = function(e) {
-        e.preventDefault();
-        window.location.href = `https://${displayDomain}`;
-    };
-
-    // Build merchant ID status.
-    let merchantIdStatus = "";
-    if (merchantIdData[displayDomain]?.merchantId) {
-        merchantIdStatus = `<div style="color: #4CAF50;">Merchant ID: ${merchantIdData[displayDomain].merchantId}</div>`;
-    } else {
-        merchantIdStatus = `<div style="color: #ff4444;">Waiting for merchant ID...</div>`;
-    }
-
-    // Get bonus data.
-    const bonusData = temporaryBonusData[displayDomain];
-    if (!bonusData) {
-        card.innerHTML = `
-            <div style="font-weight: bold;">${displayDomain} (Current)</div>
-            ${merchantIdStatus}
-            <div>Waiting for bonus data...</div>
-        `;
-        // Use fallback style while waiting.
-        card.style.background = "rgba(0,0,0,0.2)";
-        card.style.border = "1px solid #333";
-        container.appendChild(card);
-        persistGUIState();
-        return;
-    }
-
-    // Otherwise, format the bonus data.
-    const {
-        cash,
-        freeCreditMinWithdraw,
-        freeCreditMaxWithdraw,
-        commission,
-        share,
-        referral,
-        globalMinWithdraw,
-        globalMaxWithdraw
-    } = bonusData;
-
-    const { effectiveMin, effectiveMax } = getEffectiveWithdrawals(
-        freeCreditMinWithdraw,
-        freeCreditMaxWithdraw,
-        globalMinWithdraw,
-        globalMaxWithdraw
-    );
-
-    const hasValidBonus = (
-        (commission && commission.amount > 0) ||
-        (share && share.amount > 0) ||
-        (referral && referral.amount > 0)
-    );
-    // Instead of using green/red, we want:
-    // • Valid bonus: use the pink valid bonus color with strong glow.
-    // • Invalid bonus: use black color with subtle shadow.
-    if (hasValidBonus) {
-        card.style.background = "rgba(255,20,147,0.2)"; // Pink color.
-        card.style.border = "1px solid #ff1493";
-        card.style.boxShadow = "0 0 12px rgba(255,20,147,0.8)"; // Strong glow.
-    } else {
-        card.style.background = "rgba(0,0,0,0.2)"; // Black style.
-        card.style.border = "1px solid #333";
-        card.style.boxShadow = "0 0 4px rgba(0,0,0,0.5)"; // Subtle shadow.
-    }
-
+  if (!bonusData) {
     card.innerHTML = `
-        <div style="font-weight: bold;">${displayDomain} (Current)</div>
-        ${merchantIdStatus}
-        <div class="top-row">
-            <div>
-                <span>Bal:</span>
-                <strong style="color:#ffd700;">${cash ?? 0}</strong>
-            </div>
-            <div><span>Comm:</span> ${formatCommissionIndicator(commission)}</div>
-            <div><span>Share:</span> ${formatBonusIndicator(share?.amount)}</div>
-            <div><span>Ref:</span> ${formatBonusIndicator(referral?.amount)}</div>
-        </div>
-        <div class="bottom-row">
-            <div>
-                <div>Withdrawals: <span style="color:#fff;">Min: ${effectiveMin}</span> / <span style="color:#fff;">Max: ${effectiveMax}</span></div>
-            </div>
-            ${
-                (commission && commission.amount > 0) ? `
-                <div>
-                    <div>minBet: <span style="color:#fff;">${commission.minBet ?? '--'}</span>,
-                    maxW: <span style="color:#fff;">${commission.maxWithdrawal ?? '--'}</span></div>
-                    <button class="control-btn claim-btn claim-commission-btn"
-                            data-domain="${displayDomain}"
-                            data-type="commission">
-                        Claim Comm
-                    </button>
-                </div>` : `<div>&nbsp;</div>`
-            }
-            ${
-                (share && share.amount > 0) ? `
-                <div>
-                    <div>MinW: <span style="color:#fff;">${share.minWithdrawal ?? '--'}</span>,
-                    MaxW: <span style="color:#fff;">${share.maxWithdrawal ?? '--'}</span></div>
-                    <button class="control-btn claim-btn claim-share-btn"
-                            data-domain="${displayDomain}"
-                            data-type="share">
-                        Claim Share
-                    </button>
-                </div>` : `<div>&nbsp;</div>`
-            }
-            ${
-                (referral && referral.amount > 0) ? `
-                <div>
-                    <div>MinW: <span style="color:#fff;">${referral.minWithdrawal ?? '--'}</span>,
-                    MaxW: <span style="color:#fff;">${referral.maxWithdrawal ?? '--'}</span></div>
-                    <button class="control-btn claim-btn claim-referral-btn"
-                            data-domain="${displayDomain}"
-                            data-type="referral">
-                        Claim Ref
-                    </button>
-                </div>` : `<div>&nbsp;</div>`
-            }
-        </div>
+      <div style="font-weight: bold;">${displayDomain} (Current)</div>
+      ${merchantIdStatus}
+      <div>Waiting for bonus data...</div>
     `;
+    card.style.background = "rgba(0,0,0,0.2)";
+    card.style.border = "1px solid #333";
+  } else {
+    const { cash, freeCreditMinWithdraw, freeCreditMaxWithdraw, commission, share, referral, globalMinWithdraw, globalMaxWithdraw } = bonusData;
+    const { effectiveMin, effectiveMax } = getEffectiveWithdrawals(
+      freeCreditMinWithdraw,
+      freeCreditMaxWithdraw,
+      globalMinWithdraw,
+      globalMaxWithdraw
+    );
+    const hasValidBonus = (
+      (commission && commission.amount > 0) ||
+      (share && share.amount > 0) ||
+      (referral && referral.amount > 0)
+    );
+    if (hasValidBonus) {
+      card.style.background = "rgba(255,20,147,0.2)";
+      card.style.border = "1px solid #ff1493";
+      card.style.boxShadow = "0 0 12px rgba(255,20,147,0.8)";
+    } else {
+      card.style.background = "rgba(0,0,0,0.2)";
+      card.style.border = "1px solid #333";
+      card.style.boxShadow = "0 0 4px rgba(0,0,0,0.5)";
+    }
+    card.innerHTML = `
+      <div style="font-weight: bold;">${displayDomain} (Current)</div>
+      ${merchantIdStatus}
+      <div class="top-row">
+        <div><span>Bal:</span> <strong style="color:#ffd700;">${cash ?? 0}</strong></div>
+        <div><span>Comm:</span> ${formatCommissionIndicator(commission)}</div>
+        <div><span>Share:</span> ${formatBonusIndicator(share && share.amount)}</div>
+        <div><span>Ref:</span> ${formatBonusIndicator(referral && referral.amount)}</div>
+      </div>
+      <div class="bottom-row">
+        <div>
+          <div>Withdrawals: <span style="color:#fff;">Min: ${effectiveMin}</span> / <span style="color:#fff;">Max: ${effectiveMax}</span></div>
+        </div>
+        ${
+          (commission && commission.amount > 0)
+            ? `<div>
+                  <div>Min: <span style="color:#fff;">${commission.minBet ?? '--'}</span>,
+                       Max: <span style="color:#fff;">${commission.maxWithdrawal ?? '--'}</span>
+                  </div>
+                  <button class="control-btn claim-btn" data-domain="${displayDomain}" data-type="commission">
+                    Claim Comm
+                  </button>
+                </div>`
+            : `<div>&nbsp;</div>`
+        }
+        ${
+          (share && share.amount > 0)
+            ? `<div>
+                  <div>Min: <span style="color:#fff;">${share.minWithdrawal ?? '--'}</span>,
+                       Max: <span style="color:#fff;">${share.maxWithdrawal ?? '--'}</span>
+                  </div>
+                  <button class="control-btn claim-btn" data-domain="${displayDomain}" data-type="share">
+                    Claim Share
+                  </button>
+                </div>`
+            : `<div>&nbsp;</div>`
+        }
+        ${
+          (referral && referral.amount > 0)
+            ? `<div>
+                  <div>MinW: <span style="color:#fff;">${referral.minWithdrawal ?? '--'}</span>,
+                       MaxW: <span style="color:#fff;">${referral.maxWithdrawal ?? '--'}</span>
+                  </div>
+                  <button class="control-btn claim-btn" data-domain="${displayDomain}" data-type="referral">
+                    Claim Ref
+                  </button>
+                </div>`
+            : `<div>&nbsp;</div>`
+        }
+      </div>
+    `;
+  }
 
-    container.appendChild(card);
+  // Bind both claim buttons and overall card click events using the helper.
+  setupCardAndClaimClicks(card, displayDomain);
 
-    // Add event listeners to claim buttons.
-    const claimBtns = card.querySelectorAll(".claim-btn");
-    claimBtns.forEach(btn => {
-        btn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            const d = btn.getAttribute('data-domain');
-            const bonusType = btn.getAttribute('data-type');
-            claimBonus(d, bonusType);
-        });
-    });
-
-    persistGUIState();
+  // Insert the current domain card at the top.
+  resultsArea.insertBefore(card, resultsArea.firstChild);
+  persistGUIState();
 }
 
 
@@ -4146,277 +4232,735 @@ function tryDomainLogin(domain, callback) {
      * Checks a single domain.
      * This version first clears any stored bonus data so that a fresh API call is forced.
      */
-    function checkDomain(domain, forceRefresh = false) {
+    // Modified checkDomain function that updates status with progress
+// Build the dynamic request body from merchantIdData (if available)
+function buildSyncRequestBody(domain) {
+  const data = merchantIdData[domain] || {};
+  // Use dynamic values if available; otherwise, empty strings
+  const merchantId = data.merchantId || "";
+  const accessId = data.accessId || "";
+  const accessToken = data.accessToken || "";
+  const walletIsAdmin = data.walletIsAdmin || "";
+  return new URLSearchParams({
+    module: "/users/syncData",
+    merchantId: merchantId,
+    domainId: "0",
+    accessId: accessId,
+    accessToken: accessToken,
+    walletIsAdmin: walletIsAdmin
+  }).toString();
+}
+
+function checkDomain(domain, forceRefresh = false, retry = false) {
   return new Promise((resolve) => {
-    // If forceRefresh, clear any cached bonus data for this domain.
-    if (forceRefresh) {
-      temporaryBonusData[domain] = null;
-    }
+    updateStatusWithColor(`[CheckDomain] Checking ${domain}. ForceRefresh: ${forceRefresh} | Retry: ${retry}`, 'info');
+    // Clear any previous bonus data for this domain.
+    temporaryBonusData[domain] = null;
+    activeChecks.add(domain);
+
+    // Set an overall timeout (e.g., 100 seconds).
+    const overallTimeoutId = setTimeout(() => {
+      activeChecks.delete(domain);
+      const errorMsg = `[CheckDomain] Timeout (100s) reached for ${domain}`;
+      // Always set an error property so our final error count sees it.
+      temporaryBonusData[domain] = { error: errorMsg };
+      if (domain === getCurrentDisplayDomain()) {
+        updateCurrentDomainCard();
+      } else {
+        updateBonusDisplay(null, `https://${domain}`, errorMsg);
+      }
+      updateStatusWithColor(errorMsg, 'error');
+      resolve();
+    }, 100000);
 
     const merchantData = merchantIdData[domain];
-    if (!merchantData || !merchantData.merchantId) {
-      updateBonusDisplay(null, `https://${domain}`, 'No merchant ID');
-      processedCount++;
+    if (!merchantData || !merchantData.merchantId || !merchantData.accessId || !merchantData.accessToken) {
+      clearTimeout(overallTimeoutId);
       activeChecks.delete(domain);
-      updateProgress();
+      const errorMsg = `[CheckDomain] Missing required token data for ${domain}`;
+      // Always set an error property
+      temporaryBonusData[domain] = { error: errorMsg };
+      if (domain === getCurrentDisplayDomain()) {
+        updateCurrentDomainCard();
+      } else {
+        updateBonusDisplay(null, `https://${domain}`, errorMsg);
+      }
+      updateStatusWithColor(errorMsg, 'error');
       resolve();
       return;
     }
-    const accessId = merchantData.accessId;
-    const accessToken = merchantData.accessToken;
-    if (accessId && accessToken) {
-      // Use the token-based sync request.
-      performSyncRequestWithToken(domain, accessId, accessToken, merchantData.merchantId, () => {
-        processedCount++;
-        updateProgress();
-        resolve();
-      });
-      return;
-    }
-    // No valid token; perform login.
-    const creds = domainCredentials[domain] || { phone: defaultPhone, password: defaultPassword };
-    let params = new URLSearchParams();
-    params.set("mobile", creds.phone);
-    params.set("password", creds.password);
-    params.set("module", "/users/login");
-    params.set("merchantId", merchantData.merchantId);
-    params.set("domainId", "0");
-    params.set("accessId", "");
-    params.set("accessToken", "");
-    params.set("walletIsAdmin", "");
-    let loginUrl = `https://${domain}/api/v1/index.php`;
+
+    const { accessId, accessToken, merchantId } = merchantData;
+    let syncParams = new URLSearchParams();
+    syncParams.set("module", "/users/syncData");
+    syncParams.set("merchantId", merchantId);
+    syncParams.set("domainId", "0");
+    syncParams.set("accessId", accessId);
+    syncParams.set("accessToken", accessToken);
+    syncParams.set("walletIsAdmin", "");
+
+    let apiUrl = `https://${domain}/api/v1/index.php`;
+    updateStatusWithColor(`[CheckDomain] Sending syncData request for ${domain} to ${apiUrl}.`, 'info');
+
     GM_xmlhttpRequest({
       method: "POST",
-      url: loginUrl,
+      url: apiUrl,
       headers: {
         "Accept": "*/*",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
       },
-      data: params.toString(),
-      timeout: 10000,
+      data: syncParams.toString(),
+      timeout: 100000,
       onload: function(response) {
+        updateStatusWithColor(`[CheckDomain] Received response for ${domain}.`, 'info');
         try {
-          let resp = JSON.parse(response.responseText);
-          if (resp.status === "SUCCESS" && resp.data.token && resp.data.id) {
-            merchantData.accessId = resp.data.id;
-            merchantData.accessToken = resp.data.token;
-            GM_setValue("merchant_id_data", JSON.stringify(merchantIdData));
-            performSyncDataRequest(domain, loginUrl, resp.data.id, resp.data.token, merchantData.merchantId, () => {
-              processedCount++;
-              updateProgress();
-              resolve();
-            });
-          } else {
-            let msg = resp.message || "Invalid login";
-            updateBonusDisplay(null, `https://${domain}`, `Login failed: ${msg}`);
-            processedCount++;
+          let parsed = JSON.parse(response.responseText);
+          if (String(parsed.status).toUpperCase() === "SUCCESS" && parsed.data) {
+            updateStatusWithColor(`[CheckDomain] Successfully retrieved bonus data for ${domain}.`, 'success');
+            let bonusData = filterBonuses(parsed, domain);
+            temporaryBonusData[domain] = bonusData;
+            if (domain === getCurrentDisplayDomain()) {
+              updateCurrentDomainCard();
+            } else {
+              updateBonusDisplay(bonusData, `https://${domain}`);
+            }
+            lastCapturedDomain = domain;
+            lastCapturedBonus = parsed.data;
+            renderLastCapturedInfo();
+            clearTimeout(overallTimeoutId);
             activeChecks.delete(domain);
-            updateProgress();
+            resolve();
+            return;
+          } else {
+            // If error indicates token issues, attempt token refresh.
+            if (parsed.message && parsed.message.toLowerCase().includes("token")) {
+              updateStatusWithColor(`[CheckDomain] Token error for ${domain}: ${parsed.message}. Initiating token refresh via auto-login.`, 'warning');
+              delete merchantData.accessId;
+              delete merchantData.accessToken;
+              GM_setValue("merchant_id_data", JSON.stringify(merchantIdData));
+              tryAutoLogin(domain, function() {
+                setTimeout(() => {
+                  checkDomain(domain, forceRefresh, true).then(resolve);
+                }, 1000);
+              });
+              return;
+            }
+            clearTimeout(overallTimeoutId);
+            activeChecks.delete(domain);
+            const errMsg = `[CheckDomain] API error for ${domain}: ${parsed.message || 'Unknown error'}`;
+            // Always set an error property
+            temporaryBonusData[domain] = { error: errMsg };
+            if (domain === getCurrentDisplayDomain()) {
+              updateCurrentDomainCard();
+            } else {
+              updateBonusDisplay(null, `https://${domain}`, errMsg);
+            }
+            updateStatusWithColor(errMsg, 'error');
             resolve();
           }
         } catch (e) {
-          updateBonusDisplay(null, `https://${domain}`, `Parse error during login`);
-          processedCount++;
+          clearTimeout(overallTimeoutId);
           activeChecks.delete(domain);
-          updateProgress();
+          const errMsg = `[CheckDomain] Parse error for ${domain}: ${e.message}`;
+          // Always set an error property
+          temporaryBonusData[domain] = { error: errMsg };
+          if (domain === getCurrentDisplayDomain()) {
+            updateCurrentDomainCard();
+          } else {
+            updateBonusDisplay(null, `https://${domain}`, errMsg);
+          }
+          updateStatusWithColor(errMsg, 'error');
           resolve();
         }
       },
       onerror: function() {
-        updateBonusDisplay(null, `https://${domain}`, 'Network error during login');
-        processedCount++;
+        clearTimeout(overallTimeoutId);
         activeChecks.delete(domain);
-        updateProgress();
+        const errMsg = `[CheckDomain] Network error for ${domain}`;
+        // Always set an error property
+        temporaryBonusData[domain] = { error: errMsg };
+        if (domain === getCurrentDisplayDomain()) {
+          updateCurrentDomainCard();
+        } else {
+          updateBonusDisplay(null, `https://${domain}`, errMsg);
+        }
+        updateStatusWithColor(errMsg, 'error');
         resolve();
       },
       ontimeout: function() {
-        updateBonusDisplay(null, `https://${domain}`, 'Login timeout');
-        processedCount++;
+        clearTimeout(overallTimeoutId);
         activeChecks.delete(domain);
-        updateProgress();
+        const errMsg = `[CheckDomain] Request timeout for ${domain}`;
+        // Always set an error property
+        temporaryBonusData[domain] = { error: errMsg };
+        if (domain === getCurrentDisplayDomain()) {
+          updateCurrentDomainCard();
+        } else {
+          updateBonusDisplay(null, `https://${domain}`, errMsg);
+        }
+        updateStatusWithColor(errMsg, 'error');
         resolve();
       }
     });
   });
 }
+
+// Also update the token-based sync request function for consistent status updates
+function performSyncRequestWithToken(domain, accessId, accessToken, merchantId, resolve, retryCount = 0) {
+    // Minimized retry to speed up processing
+    const maxRetries = 0; // No retries for maximum speed
+
+    // Create request parameters
+    let syncParams = new URLSearchParams();
+    syncParams.set("module", "/users/syncData");
+    syncParams.set("merchantId", merchantId);
+    syncParams.set("domainId", "0");
+    syncParams.set("accessId", accessId);
+    syncParams.set("accessToken", accessToken);
+    syncParams.set("walletIsAdmin", "");
+
+    // API endpoint
+    let apiUrl = `https://${domain}/api/v1/index.php`;
+
+    // Update internal tracking
+    if (!window.domainProgress) {
+        window.domainProgress = {};
+    }
+    window.domainProgress[domain] = "processing";
+
+    // Show token request status
+    updateStatusWithColor(
+        `Fetching data for ${domain} using token...`,
+        'info',
+        { processed: processedCount, total: totalSites }
+    );
+
+    // Make the API request
+    GM_xmlhttpRequest({
+        method: "POST",
+        url: apiUrl,
+        headers: {
+            "Accept": "*/*",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+        },
+        data: syncParams.toString(),
+        timeout: 4000, // Even shorter timeout (4 seconds) to fail faster
+        onload: function(response) {
+            try {
+                let parsed = JSON.parse(response.responseText);
+                if (parsed.status === "SUCCESS" && parsed.data) {
+                    // Success - process the bonus data
+                    let bonusData = filterBonuses(parsed, domain);
+                    temporaryBonusData[domain] = bonusData;
+
+                    // Update UI if needed
+                    if (domain === getCurrentDisplayDomain()) {
+                        updateCurrentDomainCard();
+                    } else {
+                        updateBonusDisplay(bonusData, `https://${domain}`);
+                    }
+
+                    // Update last captured info
+                    lastCapturedDomain = domain;
+                    lastCapturedBonus = parsed.data;
+                    renderLastCapturedInfo();
+
+                    // Mark as completed in tracking
+                    window.domainProgress[domain] = "success";
+
+                    // Update status with success
+                    updateStatusWithColor(
+                        `Successfully fetched data for ${domain}`,
+                        'success',
+                        { processed: processedCount, total: totalSites }
+                    );
+
+                    // Done - resolve the promise
+                    resolve();
+                    return;
+                } else {
+                    // Token might be invalid, clear it for future login attempts
+                    if (parsed.message && parsed.message.toLowerCase().includes("token")) {
+                        delete merchantIdData[domain].accessId;
+                        delete merchantIdData[domain].accessToken;
+                        GM_setValue("merchant_id_data", JSON.stringify(merchantIdData));
+                    }
+
+                    // Mark failure in tracking
+                    window.domainProgress[domain] = "token_error";
+
+                    // Show error in UI
+                    updateBonusDisplay(null, `https://${domain}`, `API Error: ${parsed.message || 'Unknown error'}`);
+
+                    // Update status with error
+                    updateStatusWithColor(
+                        `API error for ${domain}: ${parsed.message || 'Unknown error'}`,
+                        'error',
+                        { processed: processedCount, total: totalSites }
+                    );
+                }
+            } catch(e) {
+                // Parse error - mark in tracking
+                window.domainProgress[domain] = "parse_error";
+
+                // Show error in UI
+                updateBonusDisplay(null, `https://${domain}`, 'Parse error in bonus response');
+
+                // Update status with parse error
+                updateStatusWithColor(
+                    `Parse error for ${domain}: ${e.message}`,
+                    'error',
+                    { processed: processedCount, total: totalSites }
+                );
+            }
+
+            // Always complete the promise, even on error
+            activeChecks.delete(domain);
+            resolve();
+        },
+        onerror: function() {
+            // Network error - mark in tracking
+            window.domainProgress[domain] = "network_error";
+
+            // Show error in UI
+            updateBonusDisplay(null, `https://${domain}`, 'Network error in bonus fetch');
+
+            // Update status with network error
+            updateStatusWithColor(
+                `Network error for ${domain}`,
+                'error',
+                { processed: processedCount, total: totalSites }
+            );
+
+            // Complete the promise
+            activeChecks.delete(domain);
+            resolve();
+        },
+        ontimeout: function() {
+            // Timeout error - mark in tracking
+            window.domainProgress[domain] = "timeout";
+
+            // Show error in UI
+            updateBonusDisplay(null, `https://${domain}`, 'Request timeout');
+
+            // Update status with timeout
+            updateStatusWithColor(
+                `Request timeout for ${domain}`,
+                'error',
+                { processed: processedCount, total: totalSites }
+            );
+
+            // Complete the promise
+            activeChecks.delete(domain);
+            resolve();
+        }
+    });
+}
+
+// Update the SyncData request after login to include status updates
+function performSyncDataRequest(domain, loginUrl, accessId, accessToken, merchantId, resolve) {
+    let syncParams = new URLSearchParams();
+    syncParams.set("module", "/users/syncData");
+    syncParams.set("merchantId", merchantId);
+    syncParams.set("domainId", "0");
+    syncParams.set("accessId", accessId);
+    syncParams.set("accessToken", accessToken);
+    syncParams.set("walletIsAdmin", "");
+
+    // Show sync data request status
+    updateStatusWithColor(
+        `Fetching data for ${domain} after login...`,
+        'info',
+        { processed: processedCount, total: totalSites }
+    );
+
+    GM_xmlhttpRequest({
+        method: "POST",
+        url: loginUrl,
+        headers: {
+            "Accept": "*/*",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+        },
+        data: syncParams.toString(),
+        timeout: 8000, // Reduced timeout
+        onload: function(response) {
+            try {
+                let parsed = JSON.parse(response.responseText);
+                if (parsed.status === "SUCCESS" && parsed.data) {
+                    let bonusData = filterBonuses(parsed, domain);
+                    temporaryBonusData[domain] = bonusData;
+                    updateBonusDisplay(bonusData, `https://${domain}`);
+                    updateCurrentDomainCard();
+                    lastCapturedDomain = domain;
+                    lastCapturedBonus = parsed.data;
+
+                    // Update status with success
+                    updateStatusWithColor(
+                        `Successfully fetched data for ${domain} after login`,
+                        'success',
+                        { processed: processedCount, total: totalSites }
+                    );
+                } else {
+                    updateBonusDisplay(null, `https://${domain}`, `SyncData failed: ${parsed.message || 'Unknown error'}`);
+
+                    // Update status with error
+                    updateStatusWithColor(
+                        `Failed to fetch data for ${domain}: ${parsed.message || 'Unknown error'}`,
+                        'error',
+                        { processed: processedCount, total: totalSites }
+                    );
+                }
+            } catch(e) {
+                updateBonusDisplay(null, `https://${domain}`, `Parse error during syncData after login`);
+
+                // Update status with parse error
+                updateStatusWithColor(
+                    `Parse error for ${domain} after login: ${e.message}`,
+                    'error',
+                    { processed: processedCount, total: totalSites }
+                );
+            }
+            processedCount++;
+            activeChecks.delete(domain);
+            
+            resolve();
+        },
+        onerror: function() {
+            updateBonusDisplay(null, `https://${domain}`, 'Network error during syncData after login');
+
+            // Update status with network error
+            updateStatusWithColor(
+                `Network error for ${domain} during syncData`,
+                'error',
+                { processed: processedCount, total: totalSites }
+            );
+
+            processedCount++;
+            activeChecks.delete(domain);
+            
+            resolve();
+        },
+        ontimeout: function() {
+            updateBonusDisplay(null, `https://${domain}`, 'Timeout during syncData after login');
+
+            // Update status with timeout
+            updateStatusWithColor(
+                `Timeout for ${domain} during syncData`,
+                'error',
+                { processed: processedCount, total: totalSites }
+            );
+
+            processedCount++;
+            activeChecks.delete(domain);
+            
+            resolve();
+        }
+    });
+}
+
+// Optimized version that uses fewer retries and faster fail behavior
+
     /**
      * Performs a syncData request using an existing token.
      * This function always makes the API call to /users/syncData, forcing a fresh bonus data update.
      */
-    function performSyncRequestWithToken(domain, accessId, accessToken, merchantId, resolve, retryCount = 0) {
-  const maxRetries = 2; // maximum number of attempts
-  let syncParams = new URLSearchParams();
-  syncParams.set("module", "/users/syncData");
-  syncParams.set("merchantId", merchantId);
-  syncParams.set("domainId", "0");
-  syncParams.set("accessId", accessId);
-  syncParams.set("accessToken", accessToken);
-  syncParams.set("walletIsAdmin", "");
-  let apiUrl = `https://${domain}/api/v1/index.php`;
 
-  GM_xmlhttpRequest({
-    method: "POST",
-    url: apiUrl,
-    headers: {
-      "Accept": "*/*",
-      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
-    },
-    data: syncParams.toString(),
-    timeout: 10000,
-    onload: function(response) {
-      try {
-        let parsed = JSON.parse(response.responseText);
-        if (parsed.status === "SUCCESS" && parsed.data) {
-          // Success: Process bonus data.
-          let bonusData = filterBonuses(parsed, domain);
-          temporaryBonusData[domain] = bonusData;
-          if (domain === getCurrentDisplayDomain()) {
-            updateCurrentDomainCard();
-          } else {
-            updateBonusDisplay(bonusData, `https://${domain}`);
-          }
-          lastCapturedDomain = domain;
-          lastCapturedBonus = parsed.data;
-          renderLastCapturedInfo();
-          updateStatusWithColor(`Captured bonus data for ${domain} using existing token`, true);
-          resolve();
-          return;
-        } else {
-          // Retrieve the error message (convert to lowercase for comparison).
-          let errorMsg = (parsed.message || 'Invalid bonus response').toLowerCase();
-          // If the error is an invalid login error, clear tokens and force a re‑login.
-          if (errorMsg.includes("invalid login error")) {
-            delete merchantIdData[domain].accessId;
-            delete merchantIdData[domain].accessToken;
-            GM_setValue("merchant_id_data", JSON.stringify(merchantIdData));
-            updateStatusWithColor(`Invalid login error for ${domain}. Clearing token and re‑logging in...`, false);
-            setTimeout(() => {
-              // Call checkDomain with forceRefresh to trigger a fresh login.
-              checkDomain(domain, true).then(resolve);
-            }, 2000);
-            return;
-          }
-          // For other errors, if retryCount is less than maxRetries, retry.
-          if (retryCount < maxRetries) {
-            updateStatusWithColor(`Error for ${domain}: ${parsed.message || 'Unknown error'}, retrying... (Attempt ${retryCount + 1})`, false);
-            setTimeout(() => {
-              performSyncRequestWithToken(domain, accessId, accessToken, merchantId, resolve, retryCount + 1);
-            }, 2000);
-            return;
-          } else {
-            updateBonusDisplay(null, `https://${domain}`, `syncData failed: ${parsed.message || 'Unknown error'}`);
-          }
-        }
-      } catch(e) {
-        if (retryCount < maxRetries) {
-          updateStatusWithColor(`Parse error for ${domain}: ${e.message}, retrying... (Attempt ${retryCount + 1})`, false);
-          setTimeout(() => {
-            performSyncRequestWithToken(domain, accessId, accessToken, merchantId, resolve, retryCount + 1);
-          }, 2000);
-          return;
-        } else {
-          updateBonusDisplay(null, `https://${domain}`, 'Parse error in bonus response');
-        }
-      }
-      processedCount++;
-      activeChecks.delete(domain);
-      updateProgress();
-      resolve();
-    },
-    onerror: function() {
-      if (retryCount < maxRetries) {
-        updateStatusWithColor(`Network error for ${domain}, retrying... (Attempt ${retryCount + 1})`, false);
-        setTimeout(() => {
-          performSyncRequestWithToken(domain, accessId, accessToken, merchantId, resolve, retryCount + 1);
-        }, 2000);
-        return;
-      } else {
-        updateBonusDisplay(null, `https://${domain}`, 'Network error in bonus fetch');
-      }
-      processedCount++;
-      activeChecks.delete(domain);
-      updateProgress();
-      resolve();
-    },
-    ontimeout: function() {
-      if (retryCount < maxRetries) {
-        updateStatusWithColor(`Timeout for ${domain}, retrying... (Attempt ${retryCount + 1})`, false);
-        setTimeout(() => {
-          performSyncRequestWithToken(domain, accessId, accessToken, merchantId, resolve, retryCount + 1);
-        }, 2000);
-        return;
-      } else {
-        updateBonusDisplay(null, `https://${domain}`, 'Bonus data timeout');
-      }
-      processedCount++;
-      activeChecks.delete(domain);
-      updateProgress();
-      resolve();
+    // Enhanced bonus data caching and bulk processing system
+// This system improves performance by intelligently processing and caching data
+
+// === BULK DATA PROCESSOR CLASS ===
+class BulkDataProcessor {
+    constructor(options = {}) {
+        this.batchSize = options.batchSize || 100;
+        this.timeout = options.timeout || 4500;
+        this.maxRetries = options.maxRetries || 2;
+        this.retryDelay = options.retryDelay || 500;
+        this.processedDomains = new Set();
+        this.inProgress = false;
+        this.abortController = null;
     }
-  });
-}
-    /**
-     * Performs a syncData request immediately after a successful login.
-     */
-    function performSyncDataRequest(domain, loginUrl, accessId, accessToken, merchantId, resolve) {
-        let syncParams = new URLSearchParams();
-        syncParams.set("module", "/users/syncData");
-        syncParams.set("merchantId", merchantId);
-        syncParams.set("domainId", "0");
-        syncParams.set("accessId", accessId);
-        syncParams.set("accessToken", accessToken);
-        syncParams.set("walletIsAdmin", "");
 
-        GM_xmlhttpRequest({
-            method: "POST",
-            url: loginUrl,
-            headers: {
-                "Accept": "*/*",
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
-            },
-            data: syncParams.toString(),
-            timeout: 10000,
-            onload: function(response) {
-                try {
-                    let parsed = JSON.parse(response.responseText);
-                    if (parsed.status === "SUCCESS" && parsed.data) {
-                        let bonusData = filterBonuses(parsed, domain);
-                        temporaryBonusData[domain] = bonusData;
-                        updateBonusDisplay(bonusData, `https://${domain}`);
-                        updateCurrentDomainCard();
-                        lastCapturedDomain = domain;
-                        lastCapturedBonus = parsed.data;
-                        renderLastCapturedInfo();
-                        updateStatusWithColor(`Captured bonus data for ${domain} after login`, true);
-                    } else {
-                        let msg = parsed.message || "Invalid bonus data after login";
-                        updateBonusDisplay(null, `https://${domain}`, `SyncData failed: ${msg}`);
-                    }
-                } catch(e) {
-                    updateBonusDisplay(null, `https://${domain}`, `Parse error during syncData after login`);
-                }
-                processedCount++;
-                activeChecks.delete(domain);
-                updateProgress();
-                resolve();
-            },
-            onerror: function() {
-                updateBonusDisplay(null, `https://${domain}`, 'Network error during syncData after login');
-                processedCount++;
-                activeChecks.delete(domain);
-                updateProgress();
-                resolve();
-            },
-            ontimeout: function() {
-                updateBonusDisplay(null, `https://${domain}`, 'Timeout during syncData after login');
-                processedCount++;
-                activeChecks.delete(domain);
-                updateProgress();
-                resolve();
+    /**
+     * Process all domains in optimized batches
+     * @param {Array} domains - List of domains to process
+     * @param {Function} processDomain - Function to process each domain
+     * @param {Function} updateStatus - Function to update status
+     * @param {Function} onProgress - Progress callback
+     * @param {Function} onComplete - Completion callback
+     */
+    async processAll(domains, processDomain, updateStatus, onProgress, onComplete) {
+        if (this.inProgress) {
+            updateStatus("Bulk processing already in progress", false);
+            return;
+        }
+
+        this.inProgress = true;
+        this.abortController = new AbortController();
+        const signal = this.abortController.signal;
+        this.processedDomains.clear();
+
+        try {
+            // Split domains into batches
+            const batches = [];
+            for (let i = 0; i < domains.length; i += this.batchSize) {
+                batches.push(domains.slice(i, i + this.batchSize));
             }
+
+            updateStatus(`Processing ${domains.length} domains in ${batches.length} batches`, true);
+
+            let processedCount = 0;
+            let errorCount = 0;
+
+            // Process each batch sequentially
+            for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+                if (signal.aborted) break;
+
+                const batch = batches[batchIndex];
+                updateStatus(`Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} domains)`, true);
+
+                // Process all domains in this batch concurrently
+                const batchResults = await Promise.allSettled(
+                    batch.map(domain =>
+                        this._processWithTimeout(domain, processDomain, signal)
+                    )
+                );
+
+                // Count successes and failures
+                batchResults.forEach(result => {
+                    processedCount++;
+                    if (result.status === 'rejected') {
+                        errorCount++;
+                    } else {
+                        this.processedDomains.add(result.value.domain);
+                    }
+                });
+
+                // Report progress
+                if (onProgress) {
+                    onProgress(processedCount, domains.length, errorCount);
+                }
+            }
+
+            updateStatus(`Completed processing ${processedCount} domains (${errorCount} errors)`, true);
+
+            if (onComplete) {
+                onComplete(this.processedDomains, errorCount);
+            }
+        } catch (error) {
+            console.error("Error in bulk processing:", error);
+            updateStatus(`Bulk processing error: ${error.message}`, false);
+        } finally {
+            this.inProgress = false;
+            this.abortController = null;
+        }
+    }
+
+    /**
+     * Abort any in-progress operations
+     */
+    abort() {
+        if (this.abortController) {
+            this.abortController.abort();
+            this.inProgress = false;
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Process a single domain with timeout protection
+     * @private
+     */
+    _processWithTimeout(domain, processDomain, signal) {
+        return new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+                reject(new Error(`Timeout processing domain: ${domain}`));
+            }, this.timeout);
+
+            processDomain(domain, signal)
+                .then(result => {
+                    clearTimeout(timeoutId);
+                    resolve({
+                        domain,
+                        result
+                    });
+                })
+                .catch(error => {
+                    clearTimeout(timeoutId);
+                    reject(error);
+                });
         });
     }
+}
 
+// === BONUS DATA CACHE SYSTEM ===
+class BonusDataCache {
+    constructor() {
+        this.memoryCache = {};
+        this.lastCacheTime = Date.now();
+        this.cacheLifetime = 30 * 60 * 1000; // 30 minutes
+    }
+
+    /**
+     * Initialize the cache from persistent storage
+     */
+    initialize() {
+        try {
+            const cachedData = GM_getValue("cached_bonus_data", "{}");
+            const cacheTime = parseInt(GM_getValue("cached_bonus_timestamp", "0"));
+
+            this.memoryCache = JSON.parse(cachedData);
+            this.lastCacheTime = cacheTime || Date.now();
+
+            //(`[BonusCache] Loaded ${Object.keys(this.memoryCache).length} cached domain records`);
+            return true;
+        } catch (error) {
+            console.error("[BonusCache] Failed to initialize cache:", error);
+            this.memoryCache = {};
+            this.lastCacheTime = Date.now();
+            return false;
+        }
+    }
+
+    /**
+     * Get data for a specific domain
+     * @param {string} domain - Domain to retrieve
+     * @returns {object|null} - Cached bonus data or null if not found
+     */
+    getDomain(domain) {
+        return this.memoryCache[domain] || null;
+    }
+
+    /**
+     * Store data for a domain
+     * @param {string} domain - Domain to store
+     * @param {object} data - Bonus data to cache
+     */
+    storeDomain(domain, data) {
+        if (!domain || !data) return false;
+        this.memoryCache[domain] = data;
+        return true;
+    }
+
+    /**
+     * Save the entire cache to persistent storage
+     */
+    persistCache() {
+        try {
+            GM_setValue("cached_bonus_data", JSON.stringify(this.memoryCache));
+            GM_setValue("cached_bonus_timestamp", Date.now().toString());
+            this.lastCacheTime = Date.now();
+            return true;
+        } catch (error) {
+            console.error("[BonusCache] Failed to persist cache:", error);
+            return false;
+        }
+    }
+
+    /**
+     * Check if the cache is expired
+     */
+    isExpired() {
+        return (Date.now() - this.lastCacheTime) > this.cacheLifetime;
+    }
+
+    /**
+     * Get all domains that match a specific criteria
+     * @param {Function} filterFn - Filter function
+     */
+    getMatchingDomains(filterFn) {
+        const result = [];
+
+        for (const domain in this.memoryCache) {
+            const data = this.memoryCache[domain];
+            if (filterFn(data, domain)) {
+                result.push(domain);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Clear cache for specific domains
+     * @param {Array} domains - Domains to clear
+     */
+    clearDomains(domains) {
+        if (!domains || !domains.length) return 0;
+
+        let cleared = 0;
+        domains.forEach(domain => {
+            if (this.memoryCache[domain]) {
+                delete this.memoryCache[domain];
+                cleared++;
+            }
+        });
+
+        if (cleared > 0) {
+            this.persistCache();
+        }
+
+        return cleared;
+    }
+}
+
+// === INTEGRATION WITH BONUS CHECKER ===
+
+// Create instances of our enhanced systems
+const bonusDataCache = new BonusDataCache();
+const bulkProcessor = new BulkDataProcessor({
+    batchSize: 100, // Process 25 domains at a time
+    timeout: 5000, // 20 second timeout per domain
+    maxRetries: 2,
+    retryDelay: 500
+});
+
+// Initialize during page load
+function initializeEnhancedSystems() {
+    // Initialize the bonus data cache
+    bonusDataCache.initialize();
+
+    // Extend the global temporary storage with cached data
+    for (const domain in bonusDataCache.memoryCache) {
+        if (!temporaryBonusData[domain]) {
+            temporaryBonusData[domain] = bonusDataCache.memoryCache[domain];
+        }
+    }
+}
+
+// Enhanced fetchFreshBonusData using our new systems
+
+
+// Initialize our enhanced systems
+document.addEventListener('DOMContentLoaded', initializeEnhancedSystems);
+
+// Add a function to show only high-value bonuses
+function showHighValueBonuses(minAmount = 5) {
+    const cards = document.querySelectorAll('.site-card');
+    let count = 0;
+
+    cards.forEach(card => {
+        const domain = card.getAttribute('data-domain');
+        if (!domain) return;
+
+        const bonusData = temporaryBonusData[domain];
+        const hasHighValue = bonusData && (
+            (bonusData.commission && bonusData.commission.amount >= minAmount) ||
+            (bonusData.share && bonusData.share.amount >= minAmount) ||
+            (bonusData.referral && bonusData.referral.amount >= minAmount)
+        );
+
+        if (hasHighValue || card.classList.contains('current-domain-card')) {
+            card.style.display = 'block';
+            count++;
+        } else {
+            card.style.display = 'none';
+        }
+    });
+
+    sortDomainCards();
+    updateStatusWithColor(`Showing ${count} site(s) with bonuses ≥${minAmount}.`, true);
+}
     /***********************************************
      *       XHR INTERCEPTION (CAPTURE MERCHANT ID) *
      ***********************************************/
@@ -4642,61 +5186,65 @@ function tryDomainLogin(domain, callback) {
      ***********************************************/
     // Replace the init function with this enhanced version
     function init() {
-    // First inject styles and create the GUI.
-    injectMinimizedStylesheet();
-    applyMinimizedStateEarly();
-    createGUI();
-    loadGUIState();
-    setupXHRInterception();
-    keepOnTop();
-    createCurrentDomainCard();
-    initializeMinimizedState();
-    setupMinimizeMaximizeButtons();
+  // First inject styles and create the GUI.
+  injectMinimizedStylesheet();
+  applyMinimizedStateEarly();
+  createGUI();
+  loadGUIState();
+  setupXHRInterception();
+  keepOnTop();
+  createCurrentDomainCard();
+  initializeMinimizedState();
+  setupMinimizeMaximizeButtons();
 
-    const currentDomain = extractBaseDomain(window.location.href);
-    if (domainList.includes(currentDomain)) {
-        // Normal processing if on a listed domain.
-        if (merchantIdData[currentDomain]?.merchantId) {
-            updateStatusWithColor(`Merchant ID already captured for ${currentDomain}: ${merchantIdData[currentDomain].merchantId}`, true);
-            if (autoLogin) {
-                setTimeout(tryAutoLogin, 1000);
-            } else if (autoNavNonVisited && !navigationScheduled) {
-                navigationScheduled = true;
-                setTimeout(() => {
-                    navigationScheduled = false;
-                    const domainsWithoutMerchantId = domainList.filter(d => !merchantIdData[d]?.merchantId);
-                    if (domainsWithoutMerchantId.length > 0) {
-                        updateStatusWithColor(`Moving to next domain without merchant ID: ${domainsWithoutMerchantId[0]}`, true);
-                        goToNextDomain();
-                    } else {
-                        updateStatusWithColor("All domains have merchant IDs captured!", true);
-                    }
-                }, 1500);
-            }
-        } else {
-            updateStatusWithColor(`Waiting for merchant ID capture for ${currentDomain}...`, false);
-        }
-        // Start bonus data capture.
-        checkAndCaptureBonusDataAfterLoad();
+  const currentDomain = extractBaseDomain(window.location.href);
+  if (domainList.includes(currentDomain)) {
+    // Normal processing if on a listed domain.
+    if (merchantIdData[currentDomain]?.merchantId) {
+      updateStatusWithColor(`Merchant ID already captured for ${currentDomain}: ${merchantIdData[currentDomain].merchantId}`, true);
+      if (autoLogin) {
+        setTimeout(tryAutoLogin, 1000);
+      } else if (autoNavNonVisited && !navigationScheduled) {
+        navigationScheduled = true;
+        setTimeout(() => {
+          navigationScheduled = false;
+          const domainsWithoutMerchantId = domainList.filter(d => !merchantIdData[d]?.merchantId);
+          if (domainsWithoutMerchantId.length > 0) {
+            updateStatusWithColor(`Moving to next domain without merchant ID: ${domainsWithoutMerchantId[0]}`, true);
+            goToNextDomain();
+          } else {
+            updateStatusWithColor("All domains have merchant IDs captured!", true);
+          }
+        }, 1500);
+      }
     } else {
-        // If current domain isn’t in the list, load the stored current domain card
-        updateStatusWithColor(`Current domain is not listed. Displaying data for last valid domain: ${getCurrentDisplayDomain()}`, true);
-        updateCurrentDomainCard();
+      updateStatusWithColor(`Waiting for merchant ID capture for ${currentDomain}...`, false);
     }
+    // Start bonus data capture.
+    checkAndCaptureBonusDataAfterLoad();
+  } else {
+    // If current domain isn’t in the list, load the stored current domain card.
+    updateStatusWithColor(`Current domain is not listed. Displaying data for last valid domain: ${getCurrentDisplayDomain()}`, true);
+    updateCurrentDomainCard();
 
-    // Continue with state checking and cleanup.
-    setupPeriodicStateCheck();
-    setInterval(cleanup, CLEANUP_INTERVAL);
-    document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
-            initializeMinimizedState();
-        } else {
-            persistGUIState();
-            clearTemporaryData();
-        }
-    });
-    window.addEventListener('beforeunload', persistGUIState);
-    console.log("[Bonus Checker] Init complete");
+    // Automatically trigger refreshLastVisited() immediately and every 5 seconds.
+    refreshLastVisited();
+    setInterval(refreshLastVisited, 25000);
+  }
+
+  // Continue with state checking and cleanup.
+  setupPeriodicStateCheck();
+  setInterval(cleanup, CLEANUP_INTERVAL);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      initializeMinimizedState();
+    } else {
+      persistGUIState();
+      clearTemporaryData();
+    }
+  });
+  window.addEventListener('beforeunload', persistGUIState);
+  //("[Bonus Checker] Init complete");
 }
 
     function cleanup() {
