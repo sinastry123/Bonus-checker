@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         aaaharry Checker - Final Version
 // @namespace    http://example.com
-// @version      9.12
+// @version      9.13
 // @description  Uses login request approach for bonus data, maintains original GUI, auto-navigates to next URL without merchant ID
 // @updateURL    https://raw.githubusercontent.com/sinastry123/Bonus-checker/main/Bonus.js
 // @downloadURL  https://raw.githubusercontent.com/sinastry123/Bonus-checker/main/Bonus.js
