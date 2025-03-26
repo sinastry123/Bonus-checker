@@ -1,4 +1,3 @@
-
  // ==UserScript==
 // @name         aaaaharry Checker - Final Version (License Fixed)
 // @namespace    http://example.com
@@ -2343,8 +2342,39 @@ function updateStatusWithColorPersistent(message, typeOrBoolean, keepVisible = t
 }
 
     function openThemeCustomizer() {
-  createSimplifiedThemeCustomizer();
+  const gui = document.getElementById('bonus-checker-container');
+  const overlay = document.getElementById('themeCustomizerOverlay');
+  if (!gui || !overlay) return;
+
+  // Compute current GUI height (includes slots + current card)
+  const guiHeight = gui.getBoundingClientRect().height;
+
+  // Position overlay immediately below the GUI
+  overlay.style.position = 'fixed';
+  overlay.style.top = `${guiHeight}px`;
+  overlay.style.left = '0';
+  overlay.style.width = '100vw';
+  overlay.style.height = `calc(100vh - ${guiHeight}px)`;
+  overlay.style.zIndex = (parseInt(getComputedStyle(gui).zIndex) || 999999) - 1;
+  overlay.style.display = 'flex';
 }
+
+    function setupThemeCustomizerResizer() {
+  const gui = document.getElementById('bonus-checker-container');
+  if (!gui) return;
+
+  const observer = new MutationObserver(openThemeCustomizer);
+  observer.observe(gui, {
+    attributes: true,
+    attributeFilter: ['class','style']
+  });
+
+  // Initial positioning
+  openThemeCustomizer();
+}
+
+// Run once after you create the theme overlay/modal
+
 // Update the existing showSelectorModeOverlay to work with our persistent status
 // Update the existing showSelectorModeOverlay to position in the middle of the screen
 function showSelectorModeOverlay(message = 'SELECTOR MODE ACTIVE') {
@@ -5157,24 +5187,7 @@ function autoLoginCheck() {
     updateStatusWithColor("Auto login: no stored token found for this domain.", "error");
   }
 }
-function setupPeriodicStateCheck() {
-  const checkInterval = setInterval(() => {
-    const container = document.getElementById('bonus-checker-container');
-    if (container) {
-      const isMinimized = GM_getValue("minimized", false);
-      if (isMinimized && !container.classList.contains('minimized')) {
-        container.classList.add('minimized');
-      } else if (!isMinimized && container.classList.contains('minimized')) {
-        container.classList.remove('minimized');
-      }
-    }
-    const maximizeBtn = document.getElementById('maximizeTracker');
-    if (maximizeBtn && container && container.classList.contains('minimized')) {
-      maximizeBtn.style.display = 'block';
-    }
-  }, 2000);
-  window.stateCheckInterval = checkInterval;
-}
+
 
 function renderLastCapturedInfo() {
   const el = document.getElementById('lastCapturedInfo');
@@ -8310,7 +8323,29 @@ function setupXHRInterception() {
 }
 
 // Theme Customizer Function
+function positionThemeCustomizerOverlay() {
+  const gui = document.getElementById('bonus-checker-container');
+  const overlay = document.getElementById('themeCustomizerOverlay');
+  if (!gui || !overlay) return;
 
+  // Compute how tall the real GUI is
+  const guiHeight = gui.getBoundingClientRect().height;
+
+  // Position overlay directly below the GUI
+  overlay.style.position = 'fixed';
+  overlay.style.top = guiHeight + 'px';
+  overlay.style.left = '50%';
+  overlay.style.transform = 'translateX(-50%)';
+
+  // Give it full remaining viewport height and scroll if needed
+  overlay.style.width = '90vw';
+  overlay.style.height = `calc(100vh - ${guiHeight}px)`;
+  overlay.style.overflowY = 'auto';
+
+  // Ensure GUI stays above
+  const guiZ = parseInt(getComputedStyle(gui).zIndex) || 999999;
+  overlay.style.zIndex = guiZ - 1;
+}
 
 function createSimplifiedThemeCustomizer() {
   // Remove any existing theme customizer
@@ -8564,11 +8599,11 @@ function createSimplifiedThemeCustomizer() {
   `;
 
   overlay.appendChild(modal);
-  document.body.appendChild(overlay);
-
-  // Setup color pickers
-  setupSimplifiedColorPickers(currentTheme);
-
+document.body.appendChild(overlay);
+openThemeCustomizer();
+setupThemeCustomizerResizer();
+// Setup color pickers
+setupSimplifiedColorPickers(currentTheme);
   // Setup preset buttons
   document.getElementById('defaultTheme').addEventListener('click', () => loadPreset('default'));
   document.getElementById('darkBlueTheme').addEventListener('click', () => loadPreset('darkBlue'));
@@ -8651,54 +8686,37 @@ function importTheme() {
 // Enhanced updateThemePreview function with accurate domain card HTML structure
 function updateThemePreview(theme) {
   const preview = document.getElementById('themePreview');
-  if (!preview) return;
+  preview.innerHTML = '';
 
-  preview.innerHTML = `
-    <div style="background: ${theme.cardBackground}; border: 2px solid ${theme.cardBorder}; border-left: 3px solid ${theme.cardBorder}; padding: 6px; border-radius: 4px; font-size: 12px; color: ${theme.mainText};">
+  // 1) Full‑GUI clone
+  const guiClone = document.getElementById('bonus-checker-container').cloneNode(true);
+  guiClone.id = 'preview-full-gui';
+  preview.appendChild(guiClone);
 
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
-        <div style="font-weight: bold; font-size:14px; color: ${theme.headerText};">betjason.com (Current)</div>
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <div style="width:40px; height:40px; background: rgba(255,255,255,0.1); border-radius:3px;"></div>
-          <button style="background:${theme.buttonBackground}; color:${theme.buttonText}; border:1px solid ${theme.buttonBorder}; padding:2px 4px; font-size:11px; border-radius:3px;"
-                  onmouseover="this.style.background='${theme.buttonHoverBackground}'; this.style.color='${theme.buttonHoverText}';"
-                  onmouseout="this.style.background='${theme.buttonBackground}'; this.style.color='${theme.buttonText}';">
-            Clear Fav
-          </button>
-        </div>
-      </div>
+  // 2) Valid card preview
+  const validBlock = document.createElement('div');
+  validBlock.className = 'preview-block';
+  validBlock.innerHTML = '<h4>Valid Bonus Card</h4>';
+  const baseCard = document.querySelector('.site-card');
+  if (baseCard) {
+    const validCard = baseCard.cloneNode(true);
+    validCard.classList.add('valid-bonus');
+    validCard.classList.remove('invalid-bonus');
+    validBlock.appendChild(validCard);
+  }
+  preview.appendChild(validBlock);
 
-      <div style="display:grid; grid-template-columns: repeat(5,1fr); gap:1px; text-align:center; margin-bottom:2px;">
-        <div>Bal: <strong style="color:${theme.valueText};">0</strong></div>
-        <div>Comm: <span style="color:${theme.successText};">Yes</span></div>
-        <div>Share: <span style="color:${theme.errorText};">No</span></div>
-        <div>Ref: <span style="color:${theme.errorText};">No</span></div>
-        <div></div>
-      </div>
-
-      <div style="display:grid; grid-template-columns: repeat(5,1fr); gap:1px; text-align:center;">
-        <div style="grid-column:span 1;">Withdrawals: Min: <span style="color:${theme.mainText};">8</span> / Max: <span style="color:${theme.mainText};">888</span></div>
-        <div style="grid-column:span 1;">
-          <div>Min: <span style="color:${theme.mainText};">1.25</span>, Max: <span style="color:${theme.mainText};">--</span></div>
-          <button style="background:${theme.buttonBackground}; color:${theme.buttonText}; border:1px solid ${theme.buttonBorder}; padding:2px 4px; font-size:11px; border-radius:3px; margin-top:2px;"
-                  onmouseover="this.style.background='${theme.buttonHoverBackground}'; this.style.color='${theme.buttonHoverText}';"
-                  onmouseout="this.style.background='${theme.buttonBackground}'; this.style.color='${theme.buttonText}';">
-            Claim Comm
-          </button>
-        </div>
-        <div style="grid-column:span 1;">&nbsp;</div>
-        <div style="grid-column:span 1;">&nbsp;</div>
-        <div></div>
-      </div>
-
-      <div style="margin-top:4px; font-size:12px; color: #4CAF50;">Merchant ID: 10662</div>
-    </div>
-
-    <div style="background: ${theme.statusBackground}; border: 1px solid ${theme.mainBorder}; color: ${theme.mainText}; padding: 8px; margin-top: 8px; border-radius: 4px; display: flex; align-items: center;">
-      <span style="background: ${theme.statusIcon}; color: ${theme.mainText}; width: 16px; height: 16px; display: inline-flex; justify-content: center; align-items: center; border-radius: 50%; font-size: 12px; margin-right: 5px;">✓</span>
-      Status example message
-    </div>
-  `;
+  // 3) Invalid card preview
+  const invalidBlock = document.createElement('div');
+  invalidBlock.className = 'preview-block';
+  invalidBlock.innerHTML = '<h4>Invalid Bonus Card</h4>';
+  if (baseCard) {
+    const invalidCard = baseCard.cloneNode(true);
+    invalidCard.classList.add('invalid-bonus');
+    invalidCard.classList.remove('valid-bonus');
+    invalidBlock.appendChild(invalidCard);
+  }
+  preview.appendChild(invalidBlock);
 }
 
 
@@ -8706,82 +8724,26 @@ function updateThemePreview(theme) {
 function setupSimplifiedColorPickers(theme) {
   document.querySelectorAll('input[type="color"]').forEach(input => {
     const key = input.getAttribute('data-key');
-
-    // Create accurate GUI mini preview
-    const miniPreview = document.createElement('div');
-    miniPreview.style.display = 'inline-block';
-    miniPreview.style.marginLeft = '8px';
-    miniPreview.style.verticalAlign = 'middle';
-
-    switch(key) {
-      case 'mainBackground':
-        miniPreview.textContent = 'Page BG';
-        miniPreview.style.background = theme[key];
-        miniPreview.style.padding = '4px';
-        miniPreview.style.color = theme.mainText;
-        break;
-
-      case 'cardBackground':
-        miniPreview.textContent = 'Card BG';
-        miniPreview.style.background = theme[key];
-        miniPreview.style.padding = '4px';
-        miniPreview.style.color = theme.mainText;
-        miniPreview.style.border = `1px solid ${theme.cardBorder}`;
-        break;
-
-      case 'buttonBackground':
-        miniPreview.innerHTML = `<button style="background:${theme.buttonBackground}; color:${theme.buttonText}; border:1px solid ${theme.buttonBorder}; padding:2px 4px;">Btn</button>`;
-        break;
-
-      case 'statusBackground':
-        miniPreview.textContent = 'Status BG';
-        miniPreview.style.background = theme[key];
-        miniPreview.style.padding = '4px';
-        miniPreview.style.color = theme.mainText;
-        miniPreview.style.border = `1px solid ${theme.mainBorder}`;
-        break;
-
-      case 'statusIcon':
-        miniPreview.innerHTML = `<span style="background:${theme.statusIcon};color:${theme.mainText};padding:2px;border-radius:50%;">✓</span>`;
-        break;
-
-      case 'progressBar':
-        miniPreview.style.background = theme[key];
-        miniPreview.style.width = '40px';
-        miniPreview.style.height = '5px';
-        miniPreview.style.borderRadius = '2px';
-        break;
-
-      default:
-        miniPreview.style.background = theme[key];
-        miniPreview.style.width = '20px';
-        miniPreview.style.height = '20px';
-        miniPreview.style.border = '1px solid #fff';
-        break;
-    }
-
-    input.parentNode.appendChild(miniPreview);
-
     input.addEventListener('input', () => {
+      const hex = input.value;
       if (key.includes('Background')) {
-        const rgb = hexToRgb(input.value);
-        let alpha = 1;
-        if (theme[key] && theme[key].includes('rgba')) {
-          const match = theme[key].match(/rgba\(.*,(.*)\)/);
-          if (match) alpha = parseFloat(match[1]);
-        }
-        theme[key] = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+        const { r, g, b } = hexToRgb(hex);
+        theme[key] = `rgba(${r},${g},${b},1)`;
       } else {
-        theme[key] = input.value;
+        theme[key] = hex;
       }
-
+      GM_setValue('theme_settings', JSON.stringify(theme));
+      generateAndApplyCSSVariables();
+      applyThemeToGUI();
       updateThemePreview(theme);
     });
   });
-
+  // Initial preview
   updateThemePreview(theme);
 }
 
+    const theme = generateAndApplyCSSVariables();
+setupSimplifiedColorPickers(theme);
     // Function to create the single Slot button that toggles slot visibility
 function addSlotToggleButton() {
   // Check if the button already exists
@@ -9213,156 +9175,85 @@ function hexToRgb(hex) {
   return { r, g, b };
 }
 }
-/**
+
+
+    function styleThemeCustomizerModal() {
+  const modal = document.getElementById('themeCustomizerModal');
+  if (!modal) return;
+
+  // Make modal a vertical flex container
+  modal.style.display = 'flex';
+  modal.style.flexDirection = 'column';
+  modal.style.height = '85vh';
+  modal.style.padding = '0';
+  modal.style.boxSizing = 'border-box';
+
+  // Preview area stays fixed at top
+  const preview = document.getElementById('themePreview');
+  preview.style.flex = '0 0 200px';
+  preview.style.overflow = 'hidden';
+  preview.style.borderBottom = '2px solid var(--mainBorder)';
+  preview.style.margin = '0';
+  preview.style.padding = '8px';
+
+  // Wrap the rest of the modal children into a scrollable content area
+  let content = modal.querySelector('.themeCustomizerContent');
+  if (!content) {
+    content = document.createElement('div');
+    content.className = 'themeCustomizerContent';
+    // Move everything except the preview into this wrapper
+    while (modal.children.length > 1) {
+      content.appendChild(modal.children[1]);
+    }
+    modal.appendChild(content);
+  }
+  content.style.flex = '1 1 auto';
+  content.style.overflowY = 'auto';
+  content.style.padding = '12px';
+  content.style.background = 'transparent';
+}
+
+
+    /**
  * Applies the currently selected theme to the GUI container, site cards, buttons, etc.
  * This ensures that the theme you pick in the popup is reflected in the actual interface.
  */
 function applyThemeToGUI() {
-  // Generate and apply CSS variables first
-  const theme = generateAndApplyCSSVariables();
-
-  // Define comprehensive styles using CSS variables
-  let themeStylesheet = document.getElementById('global-theme-styles');
-  if (!themeStylesheet) {
-    themeStylesheet = document.createElement('style');
-    themeStylesheet.id = 'global-theme-styles';
-    document.head.appendChild(themeStylesheet);
-  }
-
-  // Define comprehensive styles using CSS variables
-  themeStylesheet.textContent = `
-    /* Container styles */
+  const css = `
     #bonus-checker-container {
       background: var(--mainBackground) !important;
-      color: var(--mainText) !important;
+      border-bottom: 2px solid var(--mainBorder) !important;
     }
-
-    /* Card styles */
     .site-card {
       background: var(--cardBackground) !important;
       border: 1px solid var(--cardBorder) !important;
-      color: var(--mainText) !important;
     }
-
-    .site-card.valid-bonus {
-      background: var(--validBonusBackground) !important;
-      border-color: var(--mainBorder) !important;
-    }
-
-    .site-card.invalid-bonus {
-      background: var(--invalidBonusBackground) !important;
-      border-color: var(--mainBorder) !important;
-    }
-
-    /* Button styles */
+    .site-card.valid-bonus { background: var(--validBonusBackground) !important; }
+    .site-card.invalid-bonus { background: var(--invalidBonusBackground) !important; }
     .control-btn {
       background: var(--buttonBackground) !important;
-      color: var(--buttonText) !important;
       border: 1px solid var(--buttonBorder) !important;
-      transition: all 0.2s ease !important;
+      color: var(--buttonText) !important;
     }
-
     .control-btn:hover {
       background: var(--buttonHoverBackground) !important;
       color: var(--buttonHoverText) !important;
     }
-
-    /* Status message styles */
     #statusMessage, .status-message {
-      background-color: var(--statusBackground);
-      border-color: var(--mainBorder);
+      background: var(--statusBackground) !important;
+      border: 1px solid var(--mainBorder) !important;
     }
-
-    /* Progress bar */
-    .progress-fill, #progressBar, .status-progress-fill {
-      background: var(--progressBar) !important;
-    }
-
-    /* Card numbers */
-    .card-number {
-      background-color: var(--cardNumber) !important;
-    }
-
-    /* Status icons */
-    .status-icon {
-      background-color: var(--statusIcon) !important;
-      color: var(--mainText) !important;
-    }
-
-    /* Text colors */
-    h3, h4, .header-controls h3 {
-      color: var(--headerText) !important;
-    }
-
-    .current-domain-card strong[style*="color:#ffd700"] {
-      color: var(--valueText) !important;
-    }
-
-    .current-domain-card span[style*="color:lime"] {
-      color: var(--successText) !important;
-    }
-
-    .current-domain-card span[style*="color:red"] {
-      color: var(--errorText) !important;
-    }
-
-    /* Fix specifically for the minimized mode */
-    #bonus-checker-container.minimized {
-      border-bottom: none !important;
-    }
-
-    /* Modal styles */
-    .url-modal, .modal-overlay .url-modal {
-      background: var(--mainBackground) !important;
+    .favicon-square img {
       border: 2px solid var(--mainBorder) !important;
-    }
-
-    /* Fix for game slots */
-    .game-slot {
-      background: var(--cardBackground) !important;
-      border: 1px dashed var(--mainBorder) !important;
-    }
-
-    .game-slot.active {
-      border: 2px solid var(--mainBorder) !important;
-      box-shadow: 0 0 5px var(--mainBorder) !important;
-    }
-
-    /* Critical fixes for the pink buttons/borders in minimized mode */
-    #refreshLastMin, #nextDomainMin, #toggleCurrentCardMin, #themeCustomizeBtn, #maximizeTracker {
-      background: var(--buttonBackground) !important;
-      color: var(--buttonText) !important;
-      border: 1px solid var(--buttonBorder) !important;
-    }
-
-    #refreshLastMin:hover, #nextDomainMin:hover, #toggleCurrentCardMin:hover,
-    #themeCustomizeBtn:hover, #maximizeTracker:hover {
-      background: var(--buttonHoverBackground) !important;
-      color: var(--buttonHoverText) !important;
-    }
-
-    /* Fix the current domain card */
-    .current-domain-card {
-      background: var(--validBonusBackground) !important;
-      border-left: 3px solid var(--mainBorder) !important;
     }
   `;
-
-  // Apply direct styles to elements with inline styling
-  const valueTexts = document.querySelectorAll('strong[style*="color:#ffd700"]');
-  valueTexts.forEach(elem => {
-    elem.style.color = theme.valueText;
-  });
-
-  const successTexts = document.querySelectorAll('span[style*="color:lime"]');
-  successTexts.forEach(elem => {
-    elem.style.color = theme.successText;
-  });
-
-  const errorTexts = document.querySelectorAll('span[style*="color:red"]');
-  errorTexts.forEach(elem => {
-    elem.style.color = theme.errorText;
-  });
+  let sheet = document.getElementById('global-theme-styles');
+  if (!sheet) {
+    sheet = document.createElement('style');
+    sheet.id = 'global-theme-styles';
+    document.head.appendChild(sheet);
+  }
+  sheet.textContent = css;
 }
 
     function fixGameSlotsBorder() {
@@ -9447,7 +9338,7 @@ function enhanceApplyThemeToGUI() {
 }
 
 // Automatically call our function periodically to ensure styles are maintained
-setInterval(fixGameSlotsBorder, 1000);
+
 
 // Call immediately
 fixGameSlotsBorder();
@@ -9480,92 +9371,50 @@ function initializeThemeSystem() {
 
     // Add this function to your script
 function generateAndApplyCSSVariables() {
-  // Default theme as fallback
   const defaultTheme = {
-    // Background colors
     mainBackground: 'rgba(0,0,0,0.9)',
+    mainBorder: '#ff1493',
     cardBackground: 'rgba(0,0,0,0.6)',
+    cardBorder: '#ff1493',
     validBonusBackground: 'rgba(255,20,147,0.2)',
     invalidBonusBackground: 'rgba(255,20,147,0.05)',
-    statusBackground: 'rgba(0,0,0,0.8)',
-
-    // Border colors
-    mainBorder: '#ff1493',
-    cardBorder: '#ff1493',
-    buttonBorder: '#ff1493',
-
-    // Text colors
-    mainText: '#fff',
-    headerText: '#ff1493',
-    buttonText: '#fff',
-    successText: 'lime',
-    errorText: 'red',
-    valueText: '#ffd700',
-
-    // Button colors
     buttonBackground: 'rgba(0,0,0,0.6)',
+    buttonBorder: '#ff1493',
+    buttonText: '#fff',
     buttonHoverBackground: '#fff',
     buttonHoverText: '#ff1493',
-
-    // Other colors
-    progressBar: '#ff1493',
-    cardNumber: '#ff1493',
+    statusBackground: 'rgba(0,0,0,0.8)',
     statusIcon: '#ff1493'
   };
 
-  // Load user theme from storage
   let userTheme = {};
-  try {
-    userTheme = JSON.parse(GM_getValue('theme_settings', '{}'));
-  } catch (e) {
-    console.error("Error parsing theme settings:", e);
-    userTheme = {};
-  }
+  try { userTheme = JSON.parse(GM_getValue('theme_settings','{}')); }
+  catch(e) { userTheme = {}; }
 
-  // Merge the themes, with user theme taking precedence
   const theme = { ...defaultTheme, ...userTheme };
-
-  // Create a style element for CSS variables
-  let styleElement = document.getElementById('theme-variables-style');
-  if (!styleElement) {
-    styleElement = document.createElement('style');
-    styleElement.id = 'theme-variables-style';
-    document.head.appendChild(styleElement);
+  let style = document.getElementById('theme-variables-style');
+  if (!style) {
+    style = document.createElement('style');
+    style.id = 'theme-variables-style';
+    document.head.appendChild(style);
   }
-
-  // Generate CSS variables
-  const cssVariables = `
+  style.textContent = `
     :root {
       --mainBackground: ${theme.mainBackground};
+      --mainBorder: ${theme.mainBorder};
       --cardBackground: ${theme.cardBackground};
+      --cardBorder: ${theme.cardBorder};
       --validBonusBackground: ${theme.validBonusBackground};
       --invalidBonusBackground: ${theme.invalidBonusBackground};
-      --statusBackground: ${theme.statusBackground};
-
-      --mainBorder: ${theme.mainBorder};
-      --cardBorder: ${theme.cardBorder};
-      --buttonBorder: ${theme.buttonBorder};
-
-      --mainText: ${theme.mainText};
-      --headerText: ${theme.headerText};
-      --buttonText: ${theme.buttonText};
-      --successText: ${theme.successText};
-      --errorText: ${theme.errorText};
-      --valueText: ${theme.valueText};
-
       --buttonBackground: ${theme.buttonBackground};
+      --buttonBorder: ${theme.buttonBorder};
+      --buttonText: ${theme.buttonText};
       --buttonHoverBackground: ${theme.buttonHoverBackground};
       --buttonHoverText: ${theme.buttonHoverText};
-
-      --progressBar: ${theme.progressBar};
-      --cardNumber: ${theme.cardNumber};
+      --statusBackground: ${theme.statusBackground};
       --statusIcon: ${theme.statusIcon};
     }
   `;
-
-  // Apply CSS variables
-  styleElement.textContent = cssVariables;
-
   return theme;
 }
 // Call this function in your init() function
@@ -9745,53 +9594,7 @@ function init() {
   completeGameFlowIfNeeded();
 
   // Persist critical state periodically
-  setInterval(() => {
-    persistGUIState();
 
-    // Also check slot toggle button visibility
-    const slotToggleBtn = document.getElementById('slotToggleBtn');
-    const container = document.getElementById('bonus-checker-container');
-    if (slotToggleBtn && container) {
-      if (container.classList.contains('minimized')) {
-        if (slotToggleBtn.style.display === 'none') {
-          slotToggleBtn.style.display = 'block';
-          slotToggleBtn.style.cssText = "display: block !important;";
-          slotToggleBtn.classList.add('minimized-visible');
-        }
-      } else {
-        slotToggleBtn.style.display = 'none';
-        slotToggleBtn.classList.remove('minimized-visible');
-      }
-    }
-
-    // Apply current domain card visibility if needed
-    const currentDomainCard = document.getElementById('currentDomainCardContainer');
-    if (currentDomainCard) {
-      if (minimizedCardHidden) {
-        currentDomainCard.style.cssText = "display: none !important;";
-      } else if (minimizedCardHidden === false) { // Explicitly check for false
-        currentDomainCard.style.cssText = "display: block !important;";
-      }
-    }
-
-    // Apply game slots visibility if needed
-    const slotsContainer = document.getElementById('gameSlotsContainer');
-    if (slotsContainer) {
-      // Get the latest state from storage
-      const slotsVisible = GM_getValue("gameSlotsVisible", true);
-
-      if (slotsVisible) {
-        slotsContainer.style.display = 'flex';
-        slotsContainer.style.cssText = "display: flex !important;";
-      } else {
-        slotsContainer.style.display = 'none';
-        slotsContainer.style.cssText = "display: none !important;";
-      }
-
-      // Update global variable to match storage
-      gameSlotsVisible = slotsVisible;
-    }
-  }, 2000);
 
   // Critical event handler for toggle buttons
   document.addEventListener('click', function(e) {
