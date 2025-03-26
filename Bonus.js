@@ -1,7 +1,7 @@
  // ==UserScript==
 // @name         aaaaharry Checker - Final Version (License Fixed)
 // @namespace    http://example.com
-// @version      9.14
+// @version      9.15
 // @description  Uses Gumroad license verification correctly, maintains GUI, auto-navigation
 // @updateURL    https://raw.githubusercontent.com/sinastry123/Bonus-checker/main/Bonus.js
 // @downloadURL  https://raw.githubusercontent.com/sinastry123/Bonus-checker/main/Bonus.js
